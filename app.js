@@ -28,7 +28,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null,
+  notify: null, countering: null, counterDraft: {},
 };
 
 const LABEL = { proposed: "Waiting to be signed", open: "Open", reported: "Result pending", disputed: "Disputed", settled: "Scored", void: "Called off" };
@@ -43,6 +43,7 @@ function fromRow(r) {
     b: { name: r.b_name, uid: r.b_uid, invited: r.b_invited, proxy: r.b_proxy, signed: !!(r.b_uid || r.b_proxy) },
     status: r.status, report: r.report_winner ? { winner: r.report_winner, by: r.report_by } : null, winner: r.winner,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
+    counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
     createdAt: Date.parse(r.created_at), decidedAt: r.decided_at ? Date.parse(r.decided_at) : null, log: r.log || [],
   };
 }
@@ -57,17 +58,22 @@ const nameOf = (b, s) => (b[s]?.name || "Someone").trim();
 const shortNo = (id) => String(id).replace(/-/g, "").slice(-4).toUpperCase();
 const scored = (b) => b.status === "settled" && b.winner;
 function needsMe(b) {
+  if (b.status === "proposed" && b.counter?.by === "b" && b.a?.uid === S.me) return true;
   const s = side(b); if (!s) return false;
   if (b.status === "open") return !b.parentId && !!b.due && b.due <= today();
   if (b.status === "reported") return b.report && b.report.by !== s;
   if (b.status === "disputed") return true;
   return false;
 }
-const canSign = (b) => b.status === "proposed" && !!S.me && !b.b?.uid && b.a?.uid !== S.me && (!b.b?.invited || b.b.invited === S.me);
+const canSign = (b) => b.status === "proposed" && !!S.me && !b.b?.uid && b.a?.uid !== S.me && (!b.b?.invited || b.b.invited === S.me) && b.counter?.by !== "b";
+const counterLabel = (c) => (c.kind === "other" ? c.text || "Bragging rights" : pts(c.points));
+/* who I am while terms are still being worked out: the caller, or the invitee who's negotiating */
+const negSide = (b) => side(b) || (b.status === "proposed" && S.me && (b.counter?.uid === S.me || b.b?.invited === S.me) ? "b" : null);
+const waitingOnMyCounter = (b) => b.status === "proposed" && !!b.counter && negSide(b) === b.counter.by;
 const kids = (b) => S.bets.filter((x) => x.parentId === b.id);
 const liveKids = (b) => kids(b).filter((x) => x.status !== "void");
-const crashable = (b) => ["proposed", "open"].includes(b.status) && !b.parentId && !!S.me && !side(b) && !liveKids(b).some((k) => k.a?.uid === S.me);
-const mineList = () => S.bets.filter((b) => side(b) || canSign(b));
+const crashable = (b) => ["proposed", "open"].includes(b.status) && !b.parentId && !!S.me && !side(b) && b.b?.invited !== S.me && b.counter?.uid !== S.me && !liveKids(b).some((k) => k.a?.uid === S.me);
+const mineList = () => S.bets.filter((b) => side(b) || canSign(b) || negSide(b));
 
 /* ---------- scoring ---------- */
 function mine() {
@@ -146,10 +152,11 @@ function dueText(b) {
 }
 function statusChip(b) {
   if (needsMe(b)) {
-    const t = b.status === "open" ? "Record result" : b.status === "reported" ? "Confirm result" : "Sort it out";
+    const t = b.status === "proposed" ? "Counter offer" : b.status === "open" ? "Record result" : b.status === "reported" ? "Confirm result" : "Sort it out";
     return `<span class="st need">${t}</span>`;
   }
-  if (canSign(b)) return `<span class="st need">${b.parentId ? "Crash offer" : "Sign it"}</span>`;
+  if (canSign(b)) return `<span class="st need">${b.counter ? "Counter offer" : b.parentId ? "Crash offer" : "Sign it"}</span>`;
+  if (waitingOnMyCounter(b)) return `<span class="st">You countered</span>`;
   return `<span class="st ${["settled", "void"].includes(b.status) ? "done" : ""}">${LABEL[b.status] || b.status}</span>`;
 }
 function sigLine(b, k) {
@@ -163,8 +170,10 @@ function crashLine(b) {
   return `<div class="crashers">${ks.map((k) => `<span>${esc(nameOf(k, "a"))} crashed in backing ${esc(k.backsName || "")} · ${esc(stakeLabel(k))}${k.status === "proposed" ? " · waiting on " + esc(nameOf(k, "b")) : ""}</span>`).join("")}</div>`;
 }
 function notifyKind(b) {
-  const s = side(b); if (!s) return null;
+  const s = negSide(b); if (!s) return null;
+  if (waitingOnMyCounter(b)) return "counter";
   if (b.status === "proposed" && s === "a") return "invite";
+  if (b.status === "proposed") return null;
   if (b.status === "open") return "remind";
   if (b.status === "reported" && b.report?.by === s) return "confirm";
   if (b.status === "disputed") return "dispute";
@@ -173,7 +182,7 @@ function notifyKind(b) {
 }
 function notifyBtn(b) {
   const k = notifyKind(b); if (!k || S.notify?.id === b.id) return "";
-  return `<button class="btn quiet" data-act="notify" data-id="${b.id}" data-k="${k}">Let ${esc(nameOf(b, other(side(b))))} know</button>`;
+  return `<button class="btn quiet" data-act="notify" data-id="${b.id}" data-k="${k}">Let ${esc(nameOf(b, other(negSide(b))))} know</button>`;
 }
 
 function slip(b) {
@@ -191,18 +200,30 @@ function slip(b) {
 
   switch (b.status) {
     case "proposed":
-      if (b.parentId && s === "a") {
+      if (b.counter) {
+        const ns = negSide(b), c = esc(counterLabel(b.counter)), was = esc(stakeLabel(b));
+        const caller = esc(nameOf(b, "a")), invitee = esc(nameOf(b, "b"));
+        if (ns && ns !== b.counter.by) {
+          const from = b.counter.by === "b" ? invitee : caller;
+          note = `<b>${from}</b> ${b.counter.by === "b" ? "will take the other side" : "countered back"} for <b>${c}</b> instead of ${was}.`;
+          acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="acceptCounter" data-id="${b.id}" ${busy}>Accept ${c}</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter</button>`
+            + (ns === "a" ? `<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Call it off</button>` : `<button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`);
+        } else if (ns) {
+          note = `You offered <b>${c}</b> instead of ${was}. Waiting for <b>${ns === "a" ? invitee : caller}</b> to answer.`;
+          acts = `${notifyBtn(b)}<button class="btn quiet" data-act="withdrawCounter" data-id="${b.id}" ${busy}>Take back counter</button>`;
+        } else note = `${b.counter.by === "b" ? invitee : caller} offered different stakes. Waiting on the other side.`;
+      } else if (b.parentId && s === "a") {
         note = `You're crashing No. ${shortNo(b.parentId)}, backing <b>${esc(b.backsName || "")}</b>. Waiting for <b>${them}</b> to accept.`;
         acts = `${notifyBtn(b)}<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw offer</button>`;
       } else if (b.parentId && canSign(b)) {
         note = `<b>${esc(nameOf(b, "a"))}</b> wants in on No. ${shortNo(b.parentId)}, backing <b>${esc(b.backsName || "")}</b> against you. Accept and this rides on the same result.`;
-        acts = `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Accept the crash</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
+        acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Accept the crash</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       } else if (s === "a") {
         note = `Waiting for <b>${them}</b> to sign. Send them the link, or mark it shaken on if you agreed in person.`;
         acts = `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
       } else if (canSign(b)) {
         note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. ${b.b.invited ? "It's waiting on your signature." : "If that's you, sign to make it official."}`;
-        acts = `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Sign as ${esc(nameOf(b, "b"))}</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
+        acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Sign as ${esc(nameOf(b, "b"))}</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       }
       break;
     case "open":
@@ -253,18 +274,57 @@ function slip(b) {
     <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}</div>
     <h3>${esc(b.title)}</h3>${crashLine(b)}
     ${b.terms ? `<p class="terms">${esc(b.terms)}</p>` : ""}
-    <div class="row">${isOther(b) ? `<span class="stake text">${esc(stakeLabel(b))}</span>` : `<span class="stake">${p} <small>pts on the line</small></span>`}${dueText(b)}</div>
+    <div class="row">${b.counter && b.status === "proposed"
+      ? `<span class="was">${esc(stakeLabel(b))}</span><span class="ctr">Counter</span><span class="stake ${b.counter.kind === "other" ? "text" : ""}">${esc(counterLabel(b.counter))}</span>`
+      : isOther(b) ? `<span class="stake text">${esc(stakeLabel(b))}</span>` : `<span class="stake">${p} <small>pts on the line</small></span>`}${dueText(b)}</div>
     <div class="sigs">${sigLine(b, "a")}${sigLine(b, "b")}</div>
     ${note ? `<div class="note">${note}</div>` : ""}
     ${acts ? `<div class="acts">${acts}</div>` : ""}
     ${picker}
-    ${S.notify?.id === b.id && side(b) ? notifyPanel(b) : ""}
+    ${S.countering === b.id ? counterPanel(b) : ""}
+    ${S.notify?.id === b.id && negSide(b) ? notifyPanel(b) : ""}
   </article>`;
+}
+
+function counterPanel(b) {
+  const d = S.counterDraft;
+  const kind = d.kind || (b.counter ? b.counter.kind : b.stakeKind) || "points";
+  const ptsVal = d.pts ?? (b.counter?.kind === "points" ? b.counter.points : stakeOf(b) || 10);
+  const txtVal = d.text ?? (b.counter?.kind === "other" ? b.counter.text : isOther(b) ? b.stakeText : "");
+  return `<div class="cpanel">
+    <span class="lab">Counter with different stakes</span>
+    <span class="sub">On the table now: ${esc(b.counter ? counterLabel(b.counter) : stakeLabel(b))}</span>
+    <div class="seg" role="group" aria-label="Stake type">
+      <button type="button" aria-pressed="${kind === "points"}" data-act="cseg" data-v="points">Points</button>
+      <button type="button" aria-pressed="${kind === "other"}" data-act="cseg" data-v="other">Other</button>
+    </div>
+    ${kind === "points"
+      ? `<div class="field"><label for="cPts">Your points</label><input id="cPts" type="number" inputmode="numeric" min="1" max="1000" step="1" value="${esc(ptsVal)}"></div>`
+      : `<div class="field"><label for="cText">What the loser owes</label><input id="cText" maxlength="60" placeholder="Loser buys the first round" value="${esc(txtVal)}" autocomplete="off"></div>`}
+    <p class="err" id="counterErr" hidden></p>
+    <div class="acts"><button class="btn primary" data-act="sendCounter" data-id="${b.id}">Send counter</button><button class="btn ghost" data-act="uncounter">Cancel</button></div>
+  </div>`;
+}
+async function sendCounter(b) {
+  const err = (m) => { const e = $("#counterErr"); if (e) { e.textContent = m; e.hidden = false; } };
+  const d = S.counterDraft;
+  const kind = d.kind || (b.counter ? b.counter.kind : b.stakeKind) || "points";
+  let p = 0, txt = "";
+  if (kind === "points") {
+    p = Math.round(parseFloat($("#cPts")?.value ?? d.pts));
+    if (!(p >= 1 && p <= 1000)) return err("Put between 1 and 1,000 points on the line.");
+  } else {
+    txt = ($("#cText")?.value ?? d.text ?? "").trim();
+    if (!txt) return err("Say what the loser owes, like “Loser buys the first round.”");
+  }
+  const them = nameOf(b, other(negSide(b) || "b"));
+  const ok = await call("counter_offer", { p_id: b.id, p_kind: kind, p_points: p, p_text: txt }, "Counter sent. " + them + " answers next.", b.id);
+  if (ok) { S.countering = null; S.counterDraft = {}; S.notify = { id: b.id, kind: "counter" }; render(); }
 }
 
 /* ---------- messages to friends ---------- */
 function message(b, kind) {
-  const s = side(b), o = other(s), them = nameOf(b, o), st = stakeLabel(b), t = `"${b.title}"`;
+  const s = negSide(b), o = other(s), them = nameOf(b, o), st = stakeLabel(b), t = `"${b.title}"`;
   const due = b.due ? `, decided by ${niceDate(b.due)}` : "";
   const claim = (w) => (w === "push" ? "it's a tie" : w === "void" ? "we call it off" : w === s ? "I called it" : "you called it");
   let subject, body;
@@ -272,6 +332,12 @@ function message(b, kind) {
     case "invite":
       if (b.parentId) { subject = `Handshake: I want in on ${t}`; body = `${them}, I want in on ${t}. I'm backing ${b.backsName || "the other side"} against you for ${st}. Accept or decline on Handshake:`; }
       else { subject = `Handshake: sign your side of ${t}`; body = `${them}, I'm calling it: ${t} for ${st}${due}. Sign your side on Handshake:`; }
+      break;
+    case "counter":
+      subject = `Handshake: counter offer on ${t}`;
+      body = s === "b"
+        ? `${them}, I'll take the other side of ${t}, but for ${counterLabel(b.counter)} instead of ${st}. Accept or counter on Handshake:`
+        : `${them}, how about ${counterLabel(b.counter)} instead on ${t}? Accept or counter on Handshake:`;
       break;
     case "confirm": subject = `Handshake: confirm the result of ${t}`; body = `${them}, I recorded the result of ${t}: ${claim(b.report?.winner)}. Confirm or dispute it on Handshake:`; break;
     case "dispute": subject = `Handshake: ${t} is disputed`; body = `${them}, I disputed the result of ${t}. Let's sort it out, then one of us can record it again:`; break;
@@ -470,6 +536,12 @@ const ACT = {
   },
   dispute: (el) => call("dispute_result", { p_id: el.dataset.id }, "Marked as disputed", el.dataset.id),
   callOff: (el) => call("report_result", { p_id: el.dataset.id, p_winner: "void" }, "Asked to call it off", el.dataset.id),
+  counter: (el) => { S.countering = el.dataset.id; S.counterDraft = {}; S.notify = null; render(); },
+  uncounter: () => { S.countering = null; render(); },
+  cseg: (el) => { S.counterDraft.kind = el.dataset.v; render(); },
+  sendCounter: (el) => sendCounter(byId(el.dataset.id)),
+  acceptCounter: (el) => { const b = byId(el.dataset.id); call("accept_counter", { p_id: el.dataset.id }, "Deal. It's on for " + (b?.counter ? counterLabel(b.counter) : "the new stakes") + ".", el.dataset.id); },
+  withdrawCounter: (el) => call("withdraw_counter", { p_id: el.dataset.id }, "Counter taken back", el.dataset.id),
   crash: (el) => { S.crashing = el.dataset.id; S.crashSide = null; S.crashDraft = {}; render(); },
   uncrash: () => { S.crashing = null; render(); },
   crashSide: (el) => { S.crashSide = el.dataset.v; render(); },
@@ -489,6 +561,8 @@ const ACT = {
 };
 document.addEventListener("input", (e) => {
   if (e.target.id === "crashPts") S.crashDraft.pts = e.target.value;
+  if (e.target.id === "cPts") S.counterDraft.pts = e.target.value;
+  if (e.target.id === "cText") S.counterDraft.text = e.target.value;
   if (e.target.id === "nPhone") {
     const n = e.target.value.replace(/[^\d+]/g, "");
     store.set(phoneKey(e.target.dataset.name), n);
