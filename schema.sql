@@ -263,6 +263,14 @@ begin
   return new_id;
 end $$;
 
+-- Table access for the app. New tables aren't exposed automatically, so grant exactly
+-- what the page needs: signed-in players can read both tables and manage their own
+-- profile (row rules above still apply). Predictions change only through the actions.
+grant usage on schema public to anon, authenticated;
+grant select, insert, update on public.profiles to authenticated;
+grant select on public.predictions to authenticated;
+revoke all on public.profiles, public.predictions from anon;
+
 -- Only signed-in players may call the actions; helpers stay private.
 revoke all on function public._my_name(), public._side(predictions), public._entry(text),
   public._load(uuid), public._resolve_crashes(uuid, text) from public, anon, authenticated;
