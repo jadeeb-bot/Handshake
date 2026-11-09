@@ -11,7 +11,8 @@ Anyone can play from a link. Players sign in with their email and a 6-digit code
 | `index.html` | The page and its styles |
 | `app.js` | Everything the page does |
 | `config.js` | Your Supabase project address and public key (you fill this in) |
-| `supabase/schema.sql` | The database: tables, access rules, and every action (sign, report, confirm, crash) |
+| `supabase.js`, `591.supabase.js` | The Supabase library, bundled so the site doesn't depend on another server |
+| `schema.sql` | The database: tables, access rules, and every action (sign, report, confirm, crash) |
 
 All the rules live in the database, so nobody can edit a prediction except through the normal buttons.
 
@@ -20,7 +21,7 @@ All the rules live in the database, so nobody can edit a prediction except throu
 ### 1. Create the database (Supabase)
 
 1. Go to [supabase.com](https://supabase.com), sign in with GitHub, and create a **New project**. Any name, any region near you. Save the database password somewhere safe.
-2. When the project is ready, open **SQL Editor → New query**. Paste in everything from `supabase/schema.sql` and press **Run**. It should finish with "Success. No rows returned."
+2. When the project is ready, open **SQL Editor → New query**. Paste in everything from `schema.sql` and press **Run**. It should finish with "Success. No rows returned."
 3. Open **Authentication → Emails → Templates**. Players type a code instead of tapping a link, so the emails need to include the code:
    - In **Magic Link**, replace the message body with:
      `<h2>Your Handshake code</h2><p>Enter this code to sign in: <b>{{ .Token }}</b></p>`
