@@ -31,7 +31,7 @@ const S = {
   notify: null, countering: null, counterDraft: {}, authMode: store.get("hs-auth") === "email" ? "email" : "phone", phone: "",
 };
 
-const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Counted", void: "Called off" };
+const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
 const LIVE = ["proposed", "open", "reported", "disputed"];
 
 /* ---------- rows → slips ---------- */
@@ -127,7 +127,7 @@ const initials = (n) => n.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toU
 function renderLedger() {
   const t = mine(), dec = t.w + t.l;
   const sc = $("#score"); sc.textContent = signed(t.score); sc.className = "big " + tone(t.score);
-  $("#scoreSub").textContent = dec || t.t ? "points across " + (dec + t.t) + " counted call" + (dec + t.t === 1 ? "" : "s") : "Nothing counted yet";
+  $("#scoreSub").textContent = dec || t.t ? "points across " + (dec + t.t) + " prediction" + (dec + t.t === 1 ? "" : "s") : "No finished predictions yet";
   $("#record").textContent = t.w + "–" + t.l + (t.t ? "–" + t.t : "");
   $("#recordSub").textContent = dec ? Math.round((t.w / dec) * 100) + "% right" + (t.t ? ", " + t.t + (t.t === 1 ? " tie" : " ties") : "") : "No decided calls yet";
   $("#inPlay").textContent = t.live;
@@ -227,7 +227,7 @@ function slip(b) {
       }
       break;
     case "open":
-      if (b.parentId) { note = `Rides on No. ${shortNo(b.parentId)}. It's counted automatically when that one's result is confirmed.`; if (s) acts = notifyBtn(b); }
+      if (b.parentId) { note = `Rides on No. ${shortNo(b.parentId)}. It's done and done automatically when that one's result is confirmed.`; if (s) acts = notifyBtn(b); }
       else if (s && !pick) acts = `<button class="btn ${needsMe(b) ? "primary" : ""}" data-act="pick" data-id="${b.id}" ${busy}>Record result</button>${notifyBtn(b)}`;
       break;
     case "reported": {
@@ -374,7 +374,7 @@ function notifyPanel(b) {
 }
 
 /* ---------- board views ---------- */
-const FILTERS = [["all", "All"], ["needs", "Needs you"], ["live", "In play"], ["done", "Counted"], ["void", "Called off"]];
+const FILTERS = [["all", "All"], ["needs", "Needs you"], ["live", "In play"], ["done", "Done and done"], ["void", "Called off"]];
 function inFilter(b, f) {
   if (f === "needs") return needsMe(b) || canSign(b);
   if (f === "live") return LIVE.includes(b.status);
@@ -450,7 +450,7 @@ function renderFeed() {
 }
 function rivalSentence(r) {
   const nm = esc(r.name);
-  if (!r.w && !r.l && !r.t) return `Nothing counted with ${nm} yet. ${r.live} call${r.live === 1 ? "" : "s"} in play.`;
+  if (!r.w && !r.l && !r.t) return `No finished predictions with ${nm} yet. ${r.live} call${r.live === 1 ? "" : "s"} in play.`;
   if (r.score > 0) return `You're up ${pts(r.score)} on ${nm}, ${r.w}–${r.l} in calls.`;
   if (r.score < 0) return `${nm} is up ${pts(-r.score)} on you, ${r.l}–${r.w} in calls. Time for a rematch.`;
   return `Dead even with ${nm} on points, ${r.w}–${r.l} in calls.`;
@@ -531,7 +531,7 @@ const ACT = {
   report: (el) => call("report_result", { p_id: el.dataset.id, p_winner: el.dataset.w }, "Result sent for confirmation", el.dataset.id),
   confirm: (el) => {
     const b = byId(el.dataset.id), w = b?.report?.winner;
-    const msg = w === "void" ? "Called off" : w === "push" ? "Counted. It's a tie, no points moved." : isOther(b) ? "Counted. " + nameOf(b, w) + " wins: " + stakeLabel(b) : "Counted. " + nameOf(b, w) + " takes " + pts(stakeOf(b));
+    const msg = w === "void" ? "Called off" : w === "push" ? "Done and done. It's a tie, no points moved." : isOther(b) ? "Done and done. " + nameOf(b, w) + " wins: " + stakeLabel(b) : "Done and done. " + nameOf(b, w) + " takes " + pts(stakeOf(b));
     call("confirm_result", { p_id: el.dataset.id }, msg, el.dataset.id);
   },
   dispute: (el) => call("dispute_result", { p_id: el.dataset.id }, "Marked as disputed", el.dataset.id),
