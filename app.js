@@ -31,7 +31,7 @@ const S = {
   notify: null, countering: null, counterDraft: {}, authMode: store.get("hs-auth") === "email" ? "email" : "phone", phone: "",
 };
 
-const LABEL = { proposed: "Waiting to be signed", open: "Open", reported: "Result pending", disputed: "Disputed", settled: "Scored", void: "Called off" };
+const LABEL = { proposed: "Waiting for a handshake", open: "Open", reported: "Result pending", disputed: "Disputed", settled: "Scored", void: "Called off" };
 const LIVE = ["proposed", "open", "reported", "disputed"];
 
 /* ---------- rows → slips ---------- */
@@ -163,7 +163,7 @@ function sigLine(b, k) {
   const ok = k === "a" || b.b?.signed;
   const nm = nameOf(b, k);
   const label = k === "b" && b.b?.proxy && !b.b?.uid ? "in person" : b.parentId ? (k === "a" ? "crashed in" : "accepted") : k === "a" ? "called it" : "against";
-  return `<div class="sig"><span class="hand ${ok ? "" : "blank"}">${ok ? esc(nm) : "not signed yet"}</span><small>${label}</small></div>`;
+  return `<div class="sig"><span class="hand ${ok ? "" : "blank"}">${ok ? esc(nm) : "no handshake yet"}</span><small>${label}</small></div>`;
 }
 function crashLine(b) {
   const ks = liveKids(b); if (!ks.length) return "";
@@ -219,10 +219,10 @@ function slip(b) {
         note = `<b>${esc(nameOf(b, "a"))}</b> wants in on No. ${shortNo(b.parentId)}, backing <b>${esc(b.backsName || "")}</b> against you. Accept and this rides on the same result.`;
         acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Accept the crash</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       } else if (s === "a") {
-        note = `Waiting for <b>${them}</b> to sign. Send them the link, or mark it shaken on if you agreed in person.`;
+        note = `Waiting for <b>${them}</b> to shake on it. Send them the link, or tap "We shook on it" if you agreed in person.`;
         acts = `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
       } else if (canSign(b)) {
-        note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. ${b.b.invited ? "It's waiting on your signature." : "If that's you, sign to make it official."}`;
+        note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. ${b.b.invited ? "It's waiting on your handshake." : "If that's you, shake on it to make it official."}`;
         acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Shake on it!</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       }
       break;
@@ -331,7 +331,7 @@ function message(b, kind) {
   switch (kind) {
     case "invite":
       if (b.parentId) { subject = `Handshake: I want in on ${t}`; body = `${them}, I want in on ${t}. I'm backing ${b.backsName || "the other side"} against you for ${st}. Accept or decline on Handshake:`; }
-      else { subject = `Handshake: sign your side of ${t}`; body = `${them}, I'm calling it: ${t} for ${st}${due}. Sign your side on Handshake:`; }
+      else { subject = `Handshake: shake on ${t}`; body = `${them}, I'm calling it: ${t} for ${st}${due}. Shake on it on Handshake:`; }
       break;
     case "counter":
       subject = `Handshake: counter offer on ${t}`;
@@ -395,7 +395,7 @@ function sorted(list) {
 function renderBoard() {
   const MINE = mineList();
   if (!MINE.length) {
-    return `<div class="empty"><h3>No predictions yet</h3><p>Make the first call, or crash someone else's from the Everyone tab. Your predictions show here with a line for each side to sign.</p><button class="btn primary" data-act="new">Make a prediction</button></div>`;
+    return `<div class="empty"><h3>No predictions yet</h3><p>Make the first call, or crash someone else's from the Everyone tab. Your predictions show here once they're made, ready for both sides to shake on.</p><button class="btn primary" data-act="new">Make a prediction</button></div>`;
   }
   const list = sorted(MINE.filter((b) => inFilter(b, S.filter)));
   const chips = FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.filter === k}" data-act="filter" data-v="${k}">${l} <span class="mono">${MINE.filter((b) => inFilter(b, k)).length}</span></button>`).join("");
@@ -524,7 +524,7 @@ const ACT = {
   pick: (el) => { S.picking = el.dataset.id; S.notify = null; render(); },
   unpick: () => { S.picking = null; render(); },
   export: () => exportCsv(),
-  shook: (el) => call("mark_shook", { p_id: el.dataset.id }, "Signed for both of you", el.dataset.id),
+  shook: (el) => call("mark_shook", { p_id: el.dataset.id }, "Shaken on for both of you", el.dataset.id),
   withdraw: (el) => call("withdraw_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash offer withdrawn" : "Prediction withdrawn", el.dataset.id),
   decline: (el) => call("decline_prediction", { p_id: el.dataset.id }, "Declined", el.dataset.id),
   sign: (el) => call("sign_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash accepted. It's on." : "You shook on it. It's official.", el.dataset.id),
@@ -596,7 +596,7 @@ function setKind(k) {
 }
 function pickPerson(uid, name) {
   $("#fWith").value = name; S.pickedUid = uid; S.pickedName = name; $("#peopleList").hidden = true;
-  const pn = $("#pickNote"); pn.textContent = "Only " + name + " can sign this one."; pn.hidden = false;
+  const pn = $("#pickNote"); pn.textContent = "Only " + name + " can shake on this one."; pn.hidden = false;
 }
 function searchPeople(q) {
   const box = $("#peopleList");
@@ -644,7 +644,7 @@ $("#betForm").addEventListener("submit", async (e) => {
     if (error) throw error;
     S.fresh = data; $("#sheet").hidden = true; S.tab = "board"; S.filter = "all";
     await loadBets(); render();
-    toast(shook ? "On the board, signed by both of you" : "On the board. Let " + withN + " know so they can sign.");
+    toast(shook ? "On the board, shaken on by both of you" : "On the board. Let " + withN + " know so they can shake on it.");
     if (!shook && data) { S.notify = { id: data, kind: "invite" }; render(); document.getElementById("bet-" + data)?.scrollIntoView({ behavior: "smooth", block: "center" }); }
   } catch (x) { err(friendly(x)); }
   finally { btn.disabled = false; }

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Handshake</title>
-<meta name="description" content="Friendly predictions with your friends. Call it, sign it, score it.">
+<meta name="description" content="Friendly predictions with your friends. Call it, shake on it, count it.">
 <meta name="theme-color" content="#DCE3EA" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#11151B" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232340C8'/%3E%3Ctext x='32' y='45' font-family='Arial Narrow,Arial' font-weight='900' font-size='38' text-anchor='middle' fill='%23FFFDF4'%3Eh.%3C/text%3E%3C/svg%3E">
@@ -206,7 +206,7 @@ a.btn.primary{color:var(--slip)}
   <header class="mast">
     <div>
       <h1 class="brand">handshake<span>.</span></h1>
-      <p class="tag">Call it, sign it, and score it against your friends.</p>
+      <p class="tag">Call it. Shake on it. Count it.</p>
     </div>
     <div class="acts">
       <button class="btn primary" id="newBtn" data-act="new" hidden>New prediction</button>
@@ -250,7 +250,7 @@ a.btn.primary{color:var(--slip)}
 
   <section class="gate" id="gateName" hidden>
     <h2>What do your friends call you?</h2>
-    <p>This goes on your signature line and the standings.</p>
+    <p>This goes on your handshakes and the standings.</p>
     <form id="nameForm" novalidate style="display:flex;flex-direction:column;gap:12px">
       <div class="field"><label for="gName">Your name</label><input id="gName" maxlength="30" autocomplete="given-name" placeholder="Amr"></div>
       <p class="err" id="nameErr" hidden></p>
@@ -296,7 +296,7 @@ a.btn.primary{color:var(--slip)}
           </div>
           <div class="field"><label for="fTerms">How do we decide? <span class="hint">optional, settles arguments later</span></label>
             <textarea id="fTerms" maxlength="240" placeholder="Final score per ESPN. Overtime counts."></textarea></div>
-          <label class="check"><input type="checkbox" id="fShook"><span>We already shook on it in person. Sign for both of us.</span></label>
+          <label class="check"><input type="checkbox" id="fShook"><span>We already shook on it in person. Count it for both of us.</span></label>
           <p class="err" id="formErr" hidden></p>
           <div class="acts"><button class="btn primary" type="submit" id="saveBtn">Add to the board</button><button class="btn ghost" type="button" data-act="cancel">Cancel</button></div>
         </div>
@@ -319,7 +319,7 @@ a.btn.primary{color:var(--slip)}
 
   <footer class="foot">
     <span class="hand">A handshake still means something.</span>
-    <span>Both sides sign the call. Both sides agree on the result. Then the points move.</span>
+    <span>Both sides shake on the call. Both sides agree on the result. Then the points count.</span>
     <span class="who" id="who" hidden><span id="whoName"></span><button class="btn quiet" data-act="rename">Change name</button><button class="btn quiet" data-act="signOut">Sign out</button></span>
   </footer>
 </div>
