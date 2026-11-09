@@ -28,7 +28,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {}, authMode: store.get("hs-auth") === "email" ? "email" : "phone", phone: "",
+  notify: null, countering: null, counterDraft: {}, authMode: "phone", phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
