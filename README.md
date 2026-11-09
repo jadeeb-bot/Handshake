@@ -11,7 +11,7 @@ Anyone can play from a link. Players sign in with a link emailed to them. No pas
 | `index.html` | The page and its styles |
 | `app.js` | Everything the page does |
 | `config.js` | Your Supabase project address and public key (you fill this in) |
-| `supabase.js`, `591.supabase.js` | The Supabase library, bundled so the site doesn't depend on another server |
+| `supabase.js` | The Supabase library, bundled so the site doesn't depend on another server |
 | `schema.sql` | The database: tables, access rules, and every action (sign, report, confirm, crash) |
 
 All the rules live in the database, so nobody can edit a prediction except through the normal buttons.
