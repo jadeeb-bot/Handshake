@@ -722,9 +722,9 @@ $("#phoneForm").addEventListener("submit", async (e) => {
   btn.disabled = false; btn.textContent = "Text me a code";
   if (error) {
     const m = error.message || "";
-    err.textContent = /provider|unsupported|sms|twilio|not enabled|disabled/i.test(m) ? "Text sign-in isn't switched on yet. Use email for now."
-      : /rate|limit|too many/i.test(m) ? "Too many texts sent just now. Wait a few minutes and try again."
-      : /invalid/i.test(m) ? "That number didn't work. Check it and try again." : m;
+    err.textContent = /unsupported phone provider|phone (signups|logins|provider).*(disabled|not enabled)/i.test(m) ? "Text sign-in isn't switched on yet. Use email for now. (" + m + ")"
+      : /rate limit|too many/i.test(m) ? "Too many texts sent just now. Wait a few minutes and try again."
+      : "Couldn't send the text: " + m;
     err.hidden = false; return;
   }
   S.phone = phone; S.authMode = "phone"; store.set("hs-auth", "phone");
