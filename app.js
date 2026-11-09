@@ -557,6 +557,8 @@ const ACT = {
   restartAuth: () => showGate(S.authMode),
   useEmail: () => { S.authMode = "email"; store.set("hs-auth", "email"); showGate("email"); },
   usePhone: () => { S.authMode = "phone"; store.set("hs-auth", "phone"); showGate("phone"); },
+  authNew: () => setAuthNew(true),
+  authBack: () => setAuthNew(false),
   showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
   rename: () => { $("#gName").value = S.myName; showGate("name"); },
   signOut: async () => { await sb.auth.signOut(); location.reload(); },
@@ -712,14 +714,47 @@ function normPhone(v) {
   return null;
 }
 const prettyPhone = (p) => (p.startsWith("+1") && p.length === 12 ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
+/* Phone number + password. No texts or emails are sent, so nothing outside Supabase can block sign-in. */
+let authNew = store.get("hs-returning") !== "1";
+function setAuthNew(v) {
+  authNew = v;
+  $("#modeNew").setAttribute("aria-pressed", v); $("#modeBack").setAttribute("aria-pressed", !v);
+  $("#phoneHelp").textContent = v ? "Use your mobile number and pick a password. You'll stay signed in on this device." : "Sign in with your mobile number and password.";
+  $("#passHint").hidden = !v; $("#gPass").autocomplete = v ? "new-password" : "current-password";
+  $("#phoneBtn").textContent = v ? "Create my account" : "Sign in"; $("#phoneErr").hidden = true;
+}
+setAuthNew(authNew);
 $("#phoneForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = $("#phoneErr"); err.hidden = true;
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  const phone = normPhone($("#gPhone").value), password = $("#gPass").value;
+  if (!phone) return fail("Enter a 10-digit US number, or a + and country code for other countries.");
+  if (password.length < 6) return fail(authNew ? "Pick a password with at least 6 characters." : "Enter your password.");
+  const btn = $("#phoneBtn"); btn.disabled = true; btn.textContent = authNew ? "Creating…" : "Signing in…";
+  const res = authNew ? await sb.auth.signUp({ phone, password }) : await sb.auth.signInWithPassword({ phone, password });
+  btn.disabled = false; setAuthNew(authNew);
+  if (res.error) {
+    const m = res.error.message || "";
+    if (/already registered|already exists/i.test(m)) { setAuthNew(false); return fail("That number already has an account. Enter its password to sign in."); }
+    if (/invalid login credentials/i.test(m)) return fail("That number and password don't match. Check both, or ask the organizer to reset your password.");
+    if (/not confirmed/i.test(m)) return fail("This account is waiting on a text confirmation. Ask the organizer to switch off phone confirmations in Supabase.");
+    if (/weak|password/i.test(m)) return fail(m);
+    if (/rate limit|too many/i.test(m)) return fail("Too many tries just now. Wait a few minutes and try again.");
+    return fail("Couldn't sign in: " + m);
+  }
+  if (!res.data?.session) return fail("Your account was created but needs a text confirmation first. The organizer needs to switch off phone confirmations in Supabase.");
+  store.set("hs-returning", "1"); S.authMode = "phone";
+  await enter();
+});
+$("#unusedOtpForm")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#phoneErr"); err.hidden = true;
   const phone = normPhone($("#gPhone").value);
   if (!phone) { err.textContent = "Enter a 10-digit US number, or a + and country code for other countries."; err.hidden = false; return; }
   const btn = $("#phoneBtn"); btn.disabled = true; btn.textContent = "Sending…";
   const { error } = await sb.auth.signInWithOtp({ phone, options: { shouldCreateUser: true } });
-  btn.disabled = false; btn.textContent = "Text me a code";
+  btn.disabled = false;
   if (error) {
     const m = error.message || "";
     err.textContent = /unsupported phone provider|phone (signups|logins|provider).*(disabled|not enabled)/i.test(m) ? "Text sign-in isn't switched on yet. Use email for now. (" + m + ")"

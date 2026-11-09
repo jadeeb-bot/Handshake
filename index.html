@@ -197,6 +197,7 @@ a.btn.primary{color:var(--slip)}
 .gate{background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:22px 18px;display:flex;flex-direction:column;gap:14px;border-top:4px solid var(--pen);max-width:440px;width:100%;margin:0 auto}
 .gate h2{font-family:var(--f-display);font-stretch:78%;font-weight:800;font-size:28px;margin:0;line-height:1.05}
 .gate p{margin:0;color:var(--muted)}
+.gate .err{color:var(--stamp)}
 .gate .field input{font-size:16px}
 .otp{letter-spacing:.4em;font-family:var(--f-mono);text-align:center}
 </style>
@@ -216,12 +217,16 @@ a.btn.primary{color:var(--slip)}
   <!-- sign in -->
   <section class="gate" id="gatePhone" hidden>
     <h2>Get in on the action</h2>
-    <p>Enter your mobile number and we'll text you a 6-digit code. No password.</p>
+    <div class="seg" role="group" aria-label="New or returning">
+      <button type="button" id="modeNew" aria-pressed="true" data-act="authNew">I'm new</button>
+      <button type="button" id="modeBack" aria-pressed="false" data-act="authBack">I have an account</button>
+    </div>
+    <p id="phoneHelp">Use your mobile number and pick a password. You'll stay signed in on this device.</p>
     <form id="phoneForm" novalidate style="display:flex;flex-direction:column;gap:12px">
       <div class="field"><label for="gPhone">Mobile number</label><input id="gPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 123-4567"></div>
+      <div class="field"><label for="gPass">Password <span class="hint" id="passHint">at least 6 characters</span></label><input id="gPass" type="password" autocomplete="new-password"></div>
       <p class="err" id="phoneErr" hidden></p>
-      <button class="btn primary" type="submit" id="phoneBtn">Text me a code</button>
-      <button class="btn quiet" type="button" data-act="useEmail">Use email instead</button>
+      <button class="btn primary" type="submit" id="phoneBtn">Create my account</button>
     </form>
   </section>
 
