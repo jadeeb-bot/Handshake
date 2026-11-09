@@ -2,7 +2,7 @@
 
 Friendly predictions with your friends. Make a call, both sides sign it, both sides confirm the result, and the points move. Friends can crash any pending prediction by backing a side.
 
-Anyone can play from a link. Players sign in with a 6-digit code texted to their phone (or a link by email), and stay signed in on that device. No passwords, and no Claude or ChatGPT account.
+Anyone can play from a link. Players sign up with their mobile number and a password, and stay signed in on that device. There's no email sign-up. No passwords, and no Claude or ChatGPT account.
 
 ## What's in here
 
