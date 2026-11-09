@@ -214,6 +214,17 @@ a.btn.primary{color:var(--slip)}
   </header>
 
   <!-- sign in -->
+  <section class="gate" id="gatePhone" hidden>
+    <h2>Get in on the action</h2>
+    <p>Enter your mobile number and we'll text you a 6-digit code. No password.</p>
+    <form id="phoneForm" novalidate style="display:flex;flex-direction:column;gap:12px">
+      <div class="field"><label for="gPhone">Mobile number</label><input id="gPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="(555) 123-4567"></div>
+      <p class="err" id="phoneErr" hidden></p>
+      <button class="btn primary" type="submit" id="phoneBtn">Text me a code</button>
+      <button class="btn quiet" type="button" data-act="useEmail">Use email instead</button>
+    </form>
+  </section>
+
   <section class="gate" id="gateEmail" hidden>
     <h2>Get in on the action</h2>
     <p>Enter your email and we'll send you a sign-in link. No password.</p>
@@ -221,14 +232,15 @@ a.btn.primary{color:var(--slip)}
       <div class="field"><label for="gEmail">Email</label><input id="gEmail" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com"></div>
       <p class="err" id="emailErr" hidden></p>
       <button class="btn primary" type="submit" id="emailBtn">Email me a link</button>
+      <button class="btn quiet" type="button" data-act="usePhone">Use my phone number instead</button>
     </form>
   </section>
 
   <section class="gate" id="gateCode" hidden>
-    <h2>Check your email</h2>
+    <h2 id="codeTitle">Check your email</h2>
     <p id="codeSentTo">We sent you a sign-in link.</p>
-    <p>Open the email and tap <b>Sign in</b>. Handshake opens and you're in. It can take a minute to arrive, so check spam too.</p>
-    <div class="acts"><button class="btn quiet" type="button" data-act="restartAuth">Use a different email</button><button class="btn quiet" type="button" data-act="showCode">Got a 6-digit code instead?</button></div>
+    <p id="codeLinkHelp">Open the email and tap <b>Sign in</b>. Handshake opens and you're in. It can take a minute to arrive, so check spam too.</p>
+    <div class="acts"><button class="btn quiet" type="button" data-act="restartAuth" id="restartBtn">Use a different email</button><button class="btn quiet" type="button" data-act="showCode" id="showCodeBtn">Got a 6-digit code instead?</button></div>
     <form id="codeForm" novalidate hidden style="display:flex;flex-direction:column;gap:12px">
       <div class="field"><label for="gCode">Code</label><input id="gCode" class="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••"></div>
       <p class="err" id="codeErr" hidden></p>

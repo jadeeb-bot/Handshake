@@ -2,7 +2,7 @@
 
 Friendly predictions with your friends. Make a call, both sides sign it, both sides confirm the result, and the points move. Friends can crash any pending prediction by backing a side.
 
-Anyone can play from a link. Players sign in with a link emailed to them. No passwords, and no Claude or ChatGPT account.
+Anyone can play from a link. Players sign in with a 6-digit code texted to their phone (or a link by email), and stay signed in on that device. No passwords, and no Claude or ChatGPT account.
 
 ## What's in here
 
@@ -41,6 +41,15 @@ Open `config.js` and replace the two placeholders with the values from step 1.3.
 4. Back in Supabase, open **Authentication → URL Configuration** and set **Site URL** to that address. The sign-in emails link there, so this step is required.
 
 From now on, every change pushed to GitHub goes live on its own within a minute.
+
+## Sign-in by text (Twilio Verify)
+
+1. Create an account at [twilio.com](https://www.twilio.com). A trial account can only text numbers you've verified with Twilio, so add funds to your account before inviting friends.
+2. In the Twilio Console, open **Verify → Services**, create a service named **Handshake**, and turn on the **SMS** channel. Copy its **Service SID** (starts with `VA`).
+3. From the Twilio Console home page, copy your **Account SID** (starts with `AC`) and **Auth Token**.
+4. In Supabase, open **Authentication → Sign In / Providers → Phone**, turn it on, choose **Twilio Verify** as the SMS provider, paste the three values, and save.
+
+Until this is set up, the sign-in screen tells people to use email instead.
 
 ## Good to know
 

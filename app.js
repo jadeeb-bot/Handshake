@@ -28,7 +28,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {},
+  notify: null, countering: null, counterDraft: {}, authMode: store.get("hs-auth") === "email" ? "email" : "phone", phone: "",
 };
 
 const LABEL = { proposed: "Waiting to be signed", open: "Open", reported: "Result pending", disputed: "Disputed", settled: "Scored", void: "Called off" };
@@ -554,7 +554,9 @@ const ACT = {
     try { await navigator.share({ title: m.subject, text: m.body }); } catch (e) { if (e?.name !== "AbortError") copy(m.body, "Message copied instead"); }
   },
   pickPerson: (el) => pickPerson(el.dataset.id, el.dataset.name),
-  restartAuth: () => showGate("email"),
+  restartAuth: () => showGate(S.authMode),
+  useEmail: () => { S.authMode = "email"; store.set("hs-auth", "email"); showGate("email"); },
+  usePhone: () => { S.authMode = "phone"; store.set("hs-auth", "phone"); showGate("phone"); },
   showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
   rename: () => { $("#gName").value = S.myName; showGate("name"); },
   signOut: async () => { await sb.auth.signOut(); location.reload(); },
@@ -682,9 +684,9 @@ function liveUpdates() {
 
 /* ---------- sign-in ---------- */
 function showGate(which) {
-  $("#gateEmail").hidden = which !== "email"; $("#gateCode").hidden = which !== "code"; $("#gateName").hidden = which !== "name";
+  $("#gatePhone").hidden = which !== "phone"; $("#gateEmail").hidden = which !== "email"; $("#gateCode").hidden = which !== "code"; $("#gateName").hidden = which !== "name";
   $("#app").hidden = !!which; $("#newBtn").hidden = !!which; $("#who").hidden = !!which;
-  const f = which === "email" ? "#gEmail" : which === "code" ? "#gCode" : which === "name" ? "#gName" : null;
+  const f = which === "phone" ? "#gPhone" : which === "email" ? "#gEmail" : which === "code" ? "#gCode" : which === "name" ? "#gName" : null;
   if (f) setTimeout(() => $(f).focus(), 50);
 }
 $("#emailForm").addEventListener("submit", async (e) => {
@@ -696,18 +698,50 @@ $("#emailForm").addEventListener("submit", async (e) => {
   const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: PAGE_URL } });
   btn.disabled = false; btn.textContent = "Email me a link";
   if (error) { err.textContent = /rate|limit/i.test(error.message) ? "Too many sign-in emails sent just now. Wait a few minutes and try again." : error.message; err.hidden = false; return; }
-  S.email = email; $("#codeSentTo").textContent = "We sent a sign-in link to " + email + ".";
+  S.email = email; S.authMode = "email";
+  $("#codeTitle").textContent = "Check your email"; $("#codeSentTo").textContent = "We sent a sign-in link to " + email + ".";
+  $("#codeLinkHelp").hidden = false; $("#showCodeBtn").hidden = false; $("#restartBtn").textContent = "Use a different email";
   $("#gCode").value = ""; $("#codeForm").hidden = true; showGate("code");
+});
+/* US numbers can be typed any way; anything else needs a leading + and country code */
+function normPhone(v) {
+  const t = v.trim(), d = t.replace(/\D/g, "");
+  if (t.startsWith("+")) return d.length >= 8 && d.length <= 15 ? "+" + d : null;
+  if (d.length === 10) return "+1" + d;
+  if (d.length === 11 && d[0] === "1") return "+" + d;
+  return null;
+}
+const prettyPhone = (p) => (p.startsWith("+1") && p.length === 12 ? `(${p.slice(2, 5)}) ${p.slice(5, 8)}-${p.slice(8)}` : p);
+$("#phoneForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = $("#phoneErr"); err.hidden = true;
+  const phone = normPhone($("#gPhone").value);
+  if (!phone) { err.textContent = "Enter a 10-digit US number, or a + and country code for other countries."; err.hidden = false; return; }
+  const btn = $("#phoneBtn"); btn.disabled = true; btn.textContent = "Sending…";
+  const { error } = await sb.auth.signInWithOtp({ phone, options: { shouldCreateUser: true } });
+  btn.disabled = false; btn.textContent = "Text me a code";
+  if (error) {
+    const m = error.message || "";
+    err.textContent = /provider|unsupported|sms|twilio|not enabled|disabled/i.test(m) ? "Text sign-in isn't switched on yet. Use email for now."
+      : /rate|limit|too many/i.test(m) ? "Too many texts sent just now. Wait a few minutes and try again."
+      : /invalid/i.test(m) ? "That number didn't work. Check it and try again." : m;
+    err.hidden = false; return;
+  }
+  S.phone = phone; S.authMode = "phone"; store.set("hs-auth", "phone");
+  $("#codeTitle").textContent = "Check your texts"; $("#codeSentTo").textContent = "We texted a 6-digit code to " + prettyPhone(phone) + ". It can take a minute to arrive.";
+  $("#codeLinkHelp").hidden = true; $("#showCodeBtn").hidden = true; $("#restartBtn").textContent = "Use a different number";
+  $("#gCode").value = ""; $("#codeForm").hidden = false; showGate("code");
 });
 $("#codeForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#codeErr"); err.hidden = true;
   const token = $("#gCode").value.replace(/\D/g, "");
-  if (token.length !== 6) { err.textContent = "Enter all 6 digits from the email."; err.hidden = false; return; }
+  const viaText = S.authMode === "phone";
+  if (token.length !== 6) { err.textContent = "Enter all 6 digits from the " + (viaText ? "text." : "email."); err.hidden = false; return; }
   const btn = $("#codeBtn"); btn.disabled = true;
-  const { error } = await sb.auth.verifyOtp({ email: S.email, token, type: "email" });
+  const { error } = await sb.auth.verifyOtp(viaText ? { phone: S.phone, token, type: "sms" } : { email: S.email, token, type: "email" });
   btn.disabled = false;
-  if (error) { err.textContent = "That code didn't work. Check the latest email, or send a new code."; err.hidden = false; return; }
+  if (error) { err.textContent = "That code didn't work. Check the latest " + (viaText ? "text" : "email") + ", or send a new code."; err.hidden = false; return; }
   await enter();
 });
 $("#nameForm").addEventListener("submit", async (e) => {
@@ -727,7 +761,7 @@ let started = false, entering = null;
 function enter() { if (!entering) entering = enterOnce().finally(() => { entering = null; }); return entering; }
 async function enterOnce() {
   const { data: { session } } = await sb.auth.getSession();
-  if (!session) return showGate("email");
+  if (!session) return showGate(S.authMode);
   S.me = session.user.id;
   const { data: prof } = await sb.from("profiles").select("name").eq("id", S.me).maybeSingle();
   if (!prof?.name) { $("#gName").value = ""; return showGate("name"); }
