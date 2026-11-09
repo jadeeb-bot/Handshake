@@ -28,7 +28,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {}, authMode: "phone", phone: "",
+  notify: null, countering: null, counterDraft: {}, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
@@ -65,14 +65,15 @@ function needsMe(b) {
   if (b.status === "disputed") return true;
   return false;
 }
-const canSign = (b) => b.status === "proposed" && !!S.me && !b.b?.uid && b.a?.uid !== S.me && (!b.b?.invited || b.b.invited === S.me) && b.counter?.by !== "b";
+const invitedMe = (b) => (b.b?.invited ? b.b.invited === S.me : S.myInvites.has(b.id));
+const canSign = (b) => b.status === "proposed" && !!S.me && !b.b?.uid && b.a?.uid !== S.me && invitedMe(b) && b.counter?.by !== "b";
 const counterLabel = (c) => (c.kind === "other" ? c.text || "Bragging rights" : pts(c.points));
 /* who I am while terms are still being worked out: the caller, or the invitee who's negotiating */
-const negSide = (b) => side(b) || (b.status === "proposed" && S.me && (b.counter?.uid === S.me || b.b?.invited === S.me) ? "b" : null);
+const negSide = (b) => side(b) || (b.status === "proposed" && S.me && (b.counter?.uid === S.me || invitedMe(b)) ? "b" : null);
 const waitingOnMyCounter = (b) => b.status === "proposed" && !!b.counter && negSide(b) === b.counter.by;
 const kids = (b) => S.bets.filter((x) => x.parentId === b.id);
 const liveKids = (b) => kids(b).filter((x) => x.status !== "void");
-const crashable = (b) => ["proposed", "open"].includes(b.status) && !b.parentId && !!S.me && !side(b) && b.b?.invited !== S.me && b.counter?.uid !== S.me && !liveKids(b).some((k) => k.a?.uid === S.me);
+const crashable = (b) => ["proposed", "open"].includes(b.status) && !b.parentId && !!S.me && !side(b) && !invitedMe(b) && b.counter?.uid !== S.me && !liveKids(b).some((k) => k.a?.uid === S.me);
 const mineList = () => S.bets.filter((b) => side(b) || canSign(b) || negSide(b));
 
 /* ---------- scoring ---------- */
@@ -222,7 +223,7 @@ function slip(b) {
         note = `Waiting for <b>${them}</b> to shake on it. Send them the link, or tap "We shook on it" if you agreed in person.`;
         acts = `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
       } else if (canSign(b)) {
-        note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. ${b.b.invited ? "It's waiting on your handshake." : "If that's you, shake on it to book it."}`;
+        note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. It's waiting on your handshake.`;
         acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Shake on it!</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       }
       break;
@@ -597,7 +598,7 @@ function setKind(k) {
   $("#ptsWrap").hidden = k !== "points"; $("#otherWrap").hidden = k !== "other";
 }
 function pickPerson(uid, name) {
-  $("#fWith").value = name; S.pickedUid = uid; S.pickedName = name; $("#peopleList").hidden = true;
+  $("#fWith").value = name; S.pickedUid = uid; S.pickedName = name; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = true;
   const pn = $("#pickNote"); pn.textContent = "Only " + name + " can shake on this one."; pn.hidden = false;
 }
 function searchPeople(q) {
@@ -611,7 +612,7 @@ function searchPeople(q) {
 $("#fWith").addEventListener("focus", () => searchPeople($("#fWith").value.trim()));
 $("#fWith").addEventListener("input", (e) => {
   const v = e.target.value;
-  if (S.pickedUid && v !== S.pickedName) { S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; }
+  if (S.pickedUid && v !== S.pickedName) { S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#withPhoneWrap").hidden = false; }
   searchPeople(v.trim());
 });
 $("#fWith").addEventListener("blur", () => setTimeout(() => { if (!$("#peopleList").contains(document.activeElement)) $("#peopleList").hidden = true; }, 200));
@@ -619,7 +620,7 @@ $("#peopleList").addEventListener("pointerdown", (e) => e.preventDefault()); // 
 
 function openSheet(withName, uid) {
   $("#betForm").reset(); $("#formErr").hidden = true; setKind("points");
-  S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#peopleList").hidden = true;
+  S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = false;
   $("#fDue").value = addDays(7); $("#fPts").value = 10;
   if (withName) { if (uid) pickPerson(uid, withName); else $("#fWith").value = withName; }
   $("#sheet").hidden = false; $("#sheet").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -636,10 +637,14 @@ $("#betForm").addEventListener("submit", async (e) => {
   if (S.stakeKind === "points" && !(p >= 1 && p <= 1000)) return err("Put between 1 and 1,000 points on the line.");
   if (S.stakeKind === "other" && !otherText) return err("Say what the loser owes, like “Loser buys the first round.”");
   const shook = $("#fShook").checked;
+  const picked = S.pickedUid && withN === S.pickedName;
+  const theirPhone = picked ? null : normPhone($("#fWithPhone").value);
+  if (!picked && !shook && !theirPhone) return err("Add " + withN + "'s mobile number so only they can shake on it, or pick them from the list if they're already on Handshake.");
+  if (theirPhone) store.set(phoneKey(withN), theirPhone);
   const btn = $("#saveBtn"); btn.disabled = true;
   try {
     const { data, error } = await sb.rpc("create_prediction", {
-      p_title: title, p_with_name: withN, p_invited: S.pickedUid && withN === S.pickedName ? S.pickedUid : null,
+      p_title: title, p_with_name: withN, p_invited: picked ? S.pickedUid : null, p_invited_phone: theirPhone,
       p_category: $("#fCat").value, p_stake_kind: S.stakeKind, p_points: S.stakeKind === "points" ? p : 0,
       p_stake_text: S.stakeKind === "other" ? otherText : "", p_due: $("#fDue").value || null, p_terms: $("#fTerms").value.trim(), p_shook: shook,
     });
@@ -668,6 +673,8 @@ async function loadBets() {
   const { data, error } = await sb.from("predictions").select("*").order("created_at", { ascending: false }).limit(2000);
   if (error) throw error;
   S.bets = data.map(fromRow); S.loaded = true;
+  const inv = await sb.rpc("my_invites");
+  S.myInvites = new Set((inv.data || []).map((x) => (typeof x === "string" ? x : x.my_invites || Object.values(x)[0])));
 }
 async function loadPeople() {
   const { data } = await sb.from("profiles").select("id,name").order("name");

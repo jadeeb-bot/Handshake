@@ -15,6 +15,8 @@ Anyone can play from a link. Players sign in with a 6-digit code texted to their
 | `schema.sql` | The database: tables, access rules, and every action (sign, counter, report, confirm, crash) |
 | `update-*.sql` | Updates for a database that's already set up. Run each new one once in the SQL Editor. |
 
+Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`.
+
 All the rules live in the database, so nobody can edit a prediction except through the normal buttons.
 
 ## Setup (about 30 minutes, one time)
