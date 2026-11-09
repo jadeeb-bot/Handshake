@@ -483,6 +483,7 @@ const ACT = {
   },
   pickPerson: (el) => pickPerson(el.dataset.id, el.dataset.name),
   restartAuth: () => showGate("email"),
+  showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
   rename: () => { $("#gName").value = S.myName; showGate("name"); },
   signOut: async () => { await sb.auth.signOut(); location.reload(); },
 };
@@ -618,11 +619,11 @@ $("#emailForm").addEventListener("submit", async (e) => {
   const email = $("#gEmail").value.trim();
   if (!/^\S+@\S+\.\S+$/.test(email)) { err.textContent = "Enter a full email address, like you@example.com."; err.hidden = false; return; }
   const btn = $("#emailBtn"); btn.disabled = true; btn.textContent = "Sending…";
-  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
-  btn.disabled = false; btn.textContent = "Send my code";
-  if (error) { err.textContent = /rate|limit/i.test(error.message) ? "Too many codes sent just now. Wait a few minutes and try again." : error.message; err.hidden = false; return; }
-  S.email = email; $("#codeSentTo").textContent = "We sent a 6-digit code to " + email + ". It can take a minute to arrive.";
-  $("#gCode").value = ""; showGate("code");
+  const { error } = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: PAGE_URL } });
+  btn.disabled = false; btn.textContent = "Email me a link";
+  if (error) { err.textContent = /rate|limit/i.test(error.message) ? "Too many sign-in emails sent just now. Wait a few minutes and try again." : error.message; err.hidden = false; return; }
+  S.email = email; $("#codeSentTo").textContent = "We sent a sign-in link to " + email + ".";
+  $("#gCode").value = ""; $("#codeForm").hidden = true; showGate("code");
 });
 $("#codeForm").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -648,8 +649,9 @@ $("#nameForm").addEventListener("submit", async (e) => {
   await enter();
 });
 
-let started = false;
-async function enter() {
+let started = false, entering = null;
+function enter() { if (!entering) entering = enterOnce().finally(() => { entering = null; }); return entering; }
+async function enterOnce() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return showGate("email");
   S.me = session.user.id;
@@ -667,4 +669,6 @@ if (!sb) {
   $("#gateEmail").innerHTML = `<h2>Almost ready</h2><p>Handshake isn't connected to its database yet. Add your Supabase project URL and public key to <b>config.js</b>, then redeploy.</p>`;
 } else {
   enter();
+  // Tapping the emailed link brings people back signed in; also catch it if this tab was left open.
+  sb.auth.onAuthStateChange((event) => { if (event === "SIGNED_IN" && !started) enter(); });
 }
