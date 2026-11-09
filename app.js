@@ -332,7 +332,11 @@ function message(b, kind) {
   switch (kind) {
     case "invite":
       if (b.parentId) { subject = `Handshake: I want in on ${t}`; body = `${them}, I want in on ${t}. I'm backing ${b.backsName || "the other side"} against you for ${st}. Accept or decline on Handshake:`; }
-      else { subject = `Handshake: shake on ${t}`; body = `${them}, I'm calling it: ${t} for ${st}${due}. Shake on it on Handshake:`; }
+      else {
+        subject = `Handshake: shake on ${t}`;
+        const newbie = !b.b?.invited && !b.b?.uid;
+        body = `${them}, I'm calling it: ${t} for ${st}${due}. ${newbie ? "Sign up on Handshake with this phone number and it'll be waiting for you to shake on:" : "Shake on it on Handshake:"}`;
+      }
       break;
     case "counter":
       subject = `Handshake: counter offer on ${t}`;
@@ -360,18 +364,15 @@ function smsHref(num, body) {
 function notifyPanel(b) {
   const m = message(b, S.notify.kind);
   const num = store.get(phoneKey(m.to)) || "";
-  const share = navigator.share ? `<button class="btn primary" data-act="shareMsg" data-id="${b.id}">Share…</button>` : "";
-  return `<div class="npanel"><span class="lab">Let ${esc(m.to)} know</span>
-    <p class="msg">${esc(m.body)}</p>
-    <div class="field"><label for="nPhone">${esc(m.to)}'s number <span class="hint">optional, saved on this device only</span></label>
-      <input id="nPhone" type="tel" inputmode="tel" autocomplete="off" placeholder="Leave blank to pick in Messages" value="${esc(num)}" data-name="${esc(m.to)}"></div>
+  const invite = S.notify.kind === "invite";
+  return `<div class="npanel"><span class="lab">${invite ? "Invite " + esc(m.to) : "Let " + esc(m.to) + " know"}</span>
+    <p class="msg" id="msgText">${esc(m.body)}</p>
     <div class="acts">
-      <a class="btn ${share ? "" : "primary"}" id="smsLink" href="${esc(smsHref(num, m.body))}">Text it</a>
-      ${share}
-      <a class="btn" href="mailto:?subject=${encodeURIComponent(m.subject)}&body=${encodeURIComponent(m.body)}">Email it</a>
-      <button class="btn" data-act="copyMsg" data-id="${b.id}">Copy</button>
+      <button class="btn primary" data-act="copyMsg" data-id="${b.id}">${invite ? "Copy invite" : "Copy message"}</button>
+      <a class="btn" id="smsLink" href="${esc(smsHref(num, m.body))}">Open Messages</a>
       <button class="btn ghost" data-act="unnotify">Close</button>
-    </div></div>`;
+    </div>
+    <span class="sub">Copy it, then paste it into a text to ${esc(m.to)}${num ? " at " + esc(prettyPhone(num)) : ""}.</span></div>`;
 }
 
 /* ---------- board views ---------- */
@@ -507,6 +508,16 @@ async function call(fn, args, okMsg, id) {
   } catch (e) { toast(friendly(e)); return false; }
   finally { if (id) S.busy.delete(id); render(); }
 }
+/* copy the invite; if the clipboard is blocked, select the text so a long-press copy works */
+async function copyFrom(text, b) {
+  const them = b ? nameOf(b, other(negSide(b) || "a")) : "them";
+  try { await navigator.clipboard.writeText(text); toast("Copied. Paste it into a text to " + them + "."); }
+  catch (e) {
+    const el = $("#msgText");
+    if (el) { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); }
+    toast("Press and hold the highlighted message, then tap Copy.");
+  }
+}
 async function copy(text, ok) {
   try { await navigator.clipboard.writeText(text); toast(ok || "Copied"); }
   catch (e) { toast("Copy didn't work here. Select the message and copy it."); }
@@ -549,7 +560,7 @@ const ACT = {
   sendCrash: (el) => sendCrash(byId(el.dataset.id)),
   notify: (el) => { S.notify = { id: el.dataset.id, kind: el.dataset.k }; S.picking = null; render(); },
   unnotify: () => { S.notify = null; render(); },
-  copyMsg: (el) => copy(message(byId(el.dataset.id), S.notify.kind).body, "Message copied. Paste it into any chat."),
+  copyMsg: (el) => copyFrom(message(byId(el.dataset.id), S.notify.kind).body, byId(el.dataset.id)),
   shareMsg: async (el) => {
     const m = message(byId(el.dataset.id), S.notify.kind);
     try { await navigator.share({ title: m.subject, text: m.body }); } catch (e) { if (e?.name !== "AbortError") copy(m.body, "Message copied instead"); }
