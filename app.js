@@ -28,7 +28,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {}, authMode: "phone", myInvites: new Set(), phone: "",
+  notify: null, countering: null, counterDraft: {}, fixing: null, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
@@ -221,7 +221,7 @@ function slip(b) {
         acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Accept the crash</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       } else if (s === "a") {
         note = `Waiting for <b>${them}</b> to shake on it. Send them the link, or tap "We shook on it" if you agreed in person.`;
-        acts = `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
+        acts = S.fixing === b.id ? "" : `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet" data-act="fix" data-id="${b.id}">Fix name or number</button><button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
       } else if (canSign(b)) {
         note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. It's waiting on your handshake.`;
         acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Shake on it!</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
@@ -283,6 +283,7 @@ function slip(b) {
     ${acts ? `<div class="acts">${acts}</div>` : ""}
     ${picker}
     ${S.countering === b.id ? counterPanel(b) : ""}
+    ${S.fixing === b.id ? fixPanel(b) : ""}
     ${S.notify?.id === b.id && negSide(b) ? notifyPanel(b) : ""}
   </article>`;
 }
@@ -305,6 +306,25 @@ function counterPanel(b) {
     <p class="err" id="counterErr" hidden></p>
     <div class="acts"><button class="btn primary" data-act="sendCounter" data-id="${b.id}">Send counter</button><button class="btn ghost" data-act="uncounter">Cancel</button></div>
   </div>`;
+}
+function fixPanel(b) {
+  const num = store.get(phoneKey(nameOf(b, "b"))) || "";
+  return `<div class="cpanel">
+    <span class="lab">Fix who it's for</span>
+    <div class="field"><label for="xName">Their name</label><input id="xName" maxlength="30" value="${esc(nameOf(b, "b"))}" autocomplete="off"></div>
+    <div class="field"><label for="xPhone">Their mobile number</label><input id="xPhone" type="tel" inputmode="tel" autocomplete="off" placeholder="(555) 123-4567" value="${esc(num ? prettyPhone(num) : "")}"></div>
+    <span class="sub">Only this number can shake on it. Send them a fresh invite after you save.</span>
+    <p class="err" id="fixErr" hidden></p>
+    <div class="acts"><button class="btn primary" data-act="saveFix" data-id="${b.id}">Save</button><button class="btn ghost" data-act="unfix">Cancel</button></div>
+  </div>`;
+}
+async function saveFix(b) {
+  const err = (m) => { const e = $("#fixErr"); if (e) { e.textContent = m; e.hidden = false; } };
+  const name = $("#xName").value.trim(), phone = normPhone($("#xPhone").value);
+  if (!name) return err("Add their name.");
+  if (!phone) return err("Enter a 10-digit US number, or a + and country code for other countries.");
+  const ok = await call("fix_invite", { p_id: b.id, p_name: name, p_phone: phone }, "Saved. Now send " + name + " the invite.", b.id);
+  if (ok) { store.set(phoneKey(name), phone); S.fixing = null; S.notify = { id: b.id, kind: "invite" }; render(); }
 }
 async function sendCounter(b) {
   const err = (m) => { const e = $("#counterErr"); if (e) { e.textContent = m; e.hidden = false; } };
@@ -550,6 +570,9 @@ const ACT = {
   callOff: (el) => call("report_result", { p_id: el.dataset.id, p_winner: "void" }, "Asked to call it off", el.dataset.id),
   counter: (el) => { S.countering = el.dataset.id; S.counterDraft = {}; S.notify = null; render(); },
   uncounter: () => { S.countering = null; render(); },
+  fix: (el) => { S.fixing = el.dataset.id; S.notify = null; render(); },
+  unfix: () => { S.fixing = null; render(); },
+  saveFix: (el) => saveFix(byId(el.dataset.id)),
   cseg: (el) => { S.counterDraft.kind = el.dataset.v; render(); },
   sendCounter: (el) => sendCounter(byId(el.dataset.id)),
   acceptCounter: (el) => { const b = byId(el.dataset.id); call("accept_counter", { p_id: el.dataset.id }, "Deal. Booked for " + (b?.counter ? counterLabel(b.counter) : "the new stakes") + ".", el.dataset.id); },
