@@ -28,7 +28,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {}, fixing: null, authMode: "phone", myInvites: new Set(), phone: "",
+  notify: null, countering: null, counterDraft: {}, fixing: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
@@ -74,6 +74,9 @@ const waitingOnMyCounter = (b) => b.status === "proposed" && !!b.counter && negS
 const kids = (b) => S.bets.filter((x) => x.parentId === b.id);
 const liveKids = (b) => kids(b).filter((x) => x.status !== "void");
 const crashable = (b) => ["proposed", "open"].includes(b.status) && !b.parentId && !!S.me && !side(b) && !invitedMe(b) && b.counter?.uid !== S.me && !liveKids(b).some((k) => k.a?.uid === S.me);
+/* other one-on-ones from the same group call: same caller, call and deadline, made together */
+const siblings = (b) => (b.parentId || !side(b) ? [] : S.bets.filter((x) => x.id !== b.id && !x.parentId && x.a.uid === b.a.uid && x.title === b.title
+  && x.due === b.due && Math.abs((x.createdAt || 0) - (b.createdAt || 0)) < 10 * 60e3 && side(x) && ["open", "disputed"].includes(x.status) && !x.report));
 const mineList = () => S.bets.filter((b) => side(b) || canSign(b) || negSide(b));
 
 /* ---------- scoring ---------- */
@@ -266,7 +269,8 @@ function slip(b) {
       <button class="btn" data-act="report" data-w="${o}" data-id="${b.id}">${them}</button>
       <button class="btn" data-act="report" data-w="push" data-id="${b.id}">Tie</button>
       <button class="btn" data-act="report" data-w="void" data-id="${b.id}">Call it off</button></div>
-      <span class="sub">${them} confirms before any points move.</span>
+      ${siblings(b).length ? `<label class="check"><input type="checkbox" id="allSibs" checked><span>Record the same result against ${esc(listNames(siblings(b).map((x) => nameOf(x, other(side(x))))))} too</span></label>` : ""}
+      <span class="sub">${siblings(b).length ? "Each person" : them} confirms before any points move.</span>
       <div><button class="btn quiet" data-act="unpick">Cancel</button></div></div>`;
   }
   const cls = "slip" + (needsMe(b) || canSign(b) ? " attn" : "") + (stamp ? " has-stamp" : "") + (S.fresh === b.id ? " newly" : "");
@@ -423,7 +427,7 @@ function renderBoard() {
   const list = sorted(MINE.filter((b) => inFilter(b, S.filter)));
   const chips = FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.filter === k}" data-act="filter" data-v="${k}">${l} <span class="mono">${MINE.filter((b) => inFilter(b, k)).length}</span></button>`).join("");
   const sel = `<select id="sortSel" aria-label="Sort predictions">${[["needs", "Needs you first"], ["newest", "Newest first"], ["due", "Due soonest"], ["stake", "Most points"]].map(([k, l]) => `<option value="${k}" ${S.sort === k ? "selected" : ""}>${l}</option>`).join("")}</select>`;
-  return `<div style="display:flex;flex-direction:column;gap:14px"><div class="filters">${chips}${sel}</div>
+  return `<div style="display:flex;flex-direction:column;gap:14px">${groupInviteBox()}<div class="filters">${chips}${sel}</div>
     <div class="list">${list.length ? list.map(slip).join("") : `<div class="empty"><p>Nothing here right now.</p></div>`}</div></div>`;
 }
 function feedCard(b) {
@@ -561,7 +565,21 @@ const ACT = {
   withdraw: (el) => call("withdraw_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash offer withdrawn" : "Prediction withdrawn", el.dataset.id),
   decline: (el) => call("decline_prediction", { p_id: el.dataset.id }, "Declined", el.dataset.id),
   sign: (el) => call("sign_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash accepted. Booked." : "You shook on it. Booked!", el.dataset.id),
-  report: (el) => call("report_result", { p_id: el.dataset.id, p_winner: el.dataset.w }, "Result sent for confirmation", el.dataset.id),
+  report: async (el) => {
+    const b = byId(el.dataset.id), w = el.dataset.w, s = side(b);
+    const sibs = $("#allSibs")?.checked ? siblings(b) : [];
+    const ok = await call("report_result", { p_id: b.id, p_winner: w }, sibs.length ? null : "Result sent for confirmation", b.id);
+    if (!ok || !sibs.length) return;
+    let done = 0;
+    for (const x of sibs) {
+      const xs = side(x);
+      const xw = w === "push" || w === "void" ? w : w === s ? xs : other(xs);
+      const { error } = await sb.rpc("report_result", { p_id: x.id, p_winner: xw });
+      if (!error) done++;
+    }
+    await loadBets(); render();
+    toast("Result sent to " + (done + 1) + " people for confirmation" + (done < sibs.length ? ". Some couldn't be updated; check those slips." : "."));
+  },
   confirm: (el) => {
     const b = byId(el.dataset.id), w = b?.report?.winner;
     const msg = w === "void" ? "Called off" : w === "push" ? "Done and done. It's a tie, no points moved." : isOther(b) ? "Done and done. " + nameOf(b, w) + " wins: " + stakeLabel(b) : "Done and done. " + nameOf(b, w) + " takes " + pts(stakeOf(b));
@@ -571,6 +589,21 @@ const ACT = {
   callOff: (el) => call("report_result", { p_id: el.dataset.id, p_winner: "void" }, "Asked to call it off", el.dataset.id),
   counter: (el) => { S.countering = el.dataset.id; S.counterDraft = {}; S.notify = null; render(); },
   uncounter: () => { S.countering = null; render(); },
+  addOpp: () => {
+    const err = (m) => { const p = $("#formErr"); p.textContent = m; p.hidden = false; };
+    $("#formErr").hidden = true;
+    const o = currentOpp();
+    if (!o) return err("Type a name first, then add another person.");
+    const bad = checkOpp(o, $("#fShook").checked); if (bad) return err(bad);
+    S.opps.push(o); renderOpps(); clearOppInputs(); $("#fWith").focus();
+  },
+  removeOpp: (el) => { S.opps.splice(+el.dataset.i, 1); renderOpps(); },
+  copyGroup: async () => {
+    const text = groupMessage(S.groupInvite);
+    try { await navigator.clipboard.writeText(text); toast("Copied. Paste it into your group text."); }
+    catch (e) { const el = $("#groupText"); if (el) { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } toast("Press and hold the highlighted message, then tap Copy."); }
+  },
+  closeGroup: () => { S.groupInvite = null; render(); },
   fix: (el) => { S.fixing = el.dataset.id; S.notify = null; render(); },
   unfix: () => { S.fixing = null; render(); },
   saveFix: (el) => saveFix(byId(el.dataset.id)),
@@ -651,8 +684,46 @@ $("#fWith").addEventListener("input", (e) => {
 $("#fWith").addEventListener("blur", () => setTimeout(() => { if (!$("#peopleList").contains(document.activeElement)) $("#peopleList").hidden = true; }, 200));
 $("#peopleList").addEventListener("pointerdown", (e) => e.preventDefault()); // keep focus so the tap lands
 
+/* People added to this call so far. Each one gets their own one-on-one prediction. */
+function currentOpp() {
+  const name = $("#fWith").value.trim();
+  if (!name) return null;
+  const picked = S.pickedUid && name === S.pickedName;
+  return { name, uid: picked ? S.pickedUid : null, phone: picked ? null : normPhone($("#fWithPhone").value), rawPhone: $("#fWithPhone").value.trim() };
+}
+function checkOpp(o, shook) {
+  if (!o.uid && o.name.toLowerCase() === S.myName.toLowerCase()) return "You can't predict against yourself. Check the name.";
+  if (!o.uid && !shook && !o.phone) return "Add " + o.name + "'s mobile number so only they can shake on it, or pick them from the list if they're already on Handshake.";
+  if (S.opps.some((x) => (o.uid && x.uid === o.uid) || (o.phone && x.phone === o.phone))) return o.name + " is already on this call.";
+  return null;
+}
+function clearOppInputs() {
+  $("#fWith").value = ""; $("#fWithPhone").value = "";
+  S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#withPhoneWrap").hidden = false;
+}
+function renderOpps() {
+  const box = $("#oppList");
+  box.hidden = !S.opps.length;
+  box.innerHTML = S.opps.map((o, i) => `<span class="opp"><span>${esc(o.name)} <small>${o.uid ? "on Handshake" : o.phone ? esc(prettyPhone(o.phone)) : "in person"}</small></span><button type="button" aria-label="Remove ${esc(o.name)}" data-act="removeOpp" data-i="${i}">×</button></span>`).join("");
+  $("#fWithLabel").textContent = S.opps.length ? "Add someone else (optional)" : "Who says you're wrong?";
+}
+const listNames = (ns) => (ns.length < 2 ? ns.join("") : ns.slice(0, -1).join(", ") + " and " + ns[ns.length - 1]);
+function groupMessage(g) {
+  const due = g.due ? `, decided by ${niceDate(g.due)}` : "";
+  const allOn = g.opps.every((o) => o.uid), someOn = g.opps.some((o) => o.uid);
+  return `${listNames(g.opps.map((o) => o.name))}, I'm calling it: "${g.title}" for ${g.stake}${due}. That's me against each of you. `
+    + (allOn ? `It's on Handshake: ${PAGE_URL}` : `Sign ${someOn ? "in or sign up" : "up"} on Handshake with your own phone number: ${PAGE_URL}`)
+    + ` I'll be waiting on you to shake on it.`;
+}
+function groupInviteBox() {
+  const g = S.groupInvite; if (!g) return "";
+  return `<div class="ginvite"><span class="lab">Group invite</span>
+    <p class="msg" id="groupText">${esc(groupMessage(g))}</p>
+    <div class="acts"><button class="btn primary" data-act="copyGroup">Copy invite</button><button class="btn ghost" data-act="closeGroup">Close</button></div>
+    <span class="sub">Paste it into your group text. Each person signs up with their own number, and their prediction will be waiting.</span></div>`;
+}
 function openSheet(withName, uid) {
-  $("#betForm").reset(); $("#formErr").hidden = true; setKind("points");
+  $("#betForm").reset(); $("#formErr").hidden = true; setKind("points"); S.opps = []; renderOpps();
   S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = false;
   $("#fDue").value = addDays(7); $("#fPts").value = 10;
   if (withName) { if (uid) pickPerson(uid, withName); else $("#fWith").value = withName; }
@@ -662,32 +733,43 @@ function openSheet(withName, uid) {
 $("#betForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = (m) => { const p = $("#formErr"); p.textContent = m; p.hidden = false; };
-  const title = $("#fTitle").value.trim(), withN = $("#fWith").value.trim();
+  const title = $("#fTitle").value.trim();
   const p = Math.round(parseFloat($("#fPts").value)), otherText = $("#fOther").value.trim();
   if (!title) return err("Say what you're predicting, like “Lakers win tonight.”");
-  if (!withN) return err("Add who's taking the other side.");
-  if (withN.toLowerCase() === S.myName.toLowerCase() && !S.pickedUid) return err("You can't predict against yourself. Check the name.");
   if (S.stakeKind === "points" && !(p >= 1 && p <= 1000)) return err("Put between 1 and 1,000 points on the line.");
   if (S.stakeKind === "other" && !otherText) return err("Say what the loser owes, like “Loser buys the first round.”");
   const shook = $("#fShook").checked;
-  const picked = S.pickedUid && withN === S.pickedName;
-  const theirPhone = picked ? null : normPhone($("#fWithPhone").value);
-  if (!picked && !shook && !theirPhone) return err("Add " + withN + "'s mobile number so only they can shake on it, or pick them from the list if they're already on Handshake.");
-  if (theirPhone) store.set(phoneKey(withN), theirPhone);
+  const cur = currentOpp();
+  if (cur) { const bad = checkOpp(cur, shook); if (bad) return err(bad); }
+  const opps = cur ? [...S.opps, cur] : S.opps.slice();
+  if (!opps.length) return err("Add who's taking the other side.");
   const btn = $("#saveBtn"); btn.disabled = true;
+  const made = [];
   try {
-    const { data, error } = await sb.rpc("create_prediction", {
-      p_title: title, p_with_name: withN, p_invited: picked ? S.pickedUid : null, p_invited_phone: theirPhone,
-      p_category: $("#fCat").value, p_stake_kind: S.stakeKind, p_points: S.stakeKind === "points" ? p : 0,
-      p_stake_text: S.stakeKind === "other" ? otherText : "", p_due: $("#fDue").value || null, p_terms: $("#fTerms").value.trim(), p_shook: shook,
-    });
-    if (error) throw error;
-    S.fresh = data; $("#sheet").hidden = true; S.tab = "board"; S.filter = "all";
-    await loadBets(); render();
-    toast(shook ? "Booked for both of you" : "On the board. Let " + withN + " know so they can shake on it.");
-    if (!shook && data) { S.notify = { id: data, kind: "invite" }; render(); document.getElementById("bet-" + data)?.scrollIntoView({ behavior: "smooth", block: "center" }); }
-  } catch (x) { err(friendly(x)); }
-  finally { btn.disabled = false; }
+    for (const o of opps) {
+      const { data, error } = await sb.rpc("create_prediction", {
+        p_title: title, p_with_name: o.name, p_invited: o.uid, p_invited_phone: o.phone,
+        p_category: $("#fCat").value, p_stake_kind: S.stakeKind, p_points: S.stakeKind === "points" ? p : 0,
+        p_stake_text: S.stakeKind === "other" ? otherText : "", p_due: $("#fDue").value || null, p_terms: $("#fTerms").value.trim(), p_shook: shook,
+      });
+      if (error) throw Object.assign(error, { who: o.name });
+      if (o.phone) store.set(phoneKey(o.name), o.phone);
+      made.push({ ...o, id: data });
+    }
+  } catch (x) {
+    btn.disabled = false;
+    if (made.length) { S.opps = opps.filter((o) => !made.some((m) => m.name === o.name)); renderOpps(); clearOppInputs(); await loadBets(); render(); }
+    return err((made.length ? "Added " + listNames(made.map((m) => m.name)) + ", but not " + x.who + ": " : "") + friendly(x));
+  }
+  btn.disabled = false;
+  S.fresh = made[0]?.id; $("#sheet").hidden = true; S.tab = "board"; S.filter = "all"; S.opps = [];
+  const stake = S.stakeKind === "points" ? pts(p) : otherText;
+  if (!shook && made.length > 1) S.groupInvite = { title, stake, due: $("#fDue").value || "", opps: made };
+  else if (!shook && made[0]) S.notify = { id: made[0].id, kind: "invite" };
+  await loadBets(); render();
+  if (shook) toast(made.length > 1 ? "Booked with " + listNames(made.map((m) => m.name)) + "." : "Booked for both of you");
+  else if (made.length > 1) { toast("On the board with " + made.length + " people. Copy the group invite."); window.scrollTo({ top: $("#view").offsetTop - 10, behavior: "smooth" }); }
+  else { toast("On the board. Let " + made[0].name + " know so they can shake on it."); document.getElementById("bet-" + made[0].id)?.scrollIntoView({ behavior: "smooth", block: "center" }); }
 });
 
 /* ---------- export ---------- */
