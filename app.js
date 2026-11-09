@@ -31,7 +31,7 @@ const S = {
   notify: null, countering: null, counterDraft: {}, authMode: store.get("hs-auth") === "email" ? "email" : "phone", phone: "",
 };
 
-const LABEL = { proposed: "Waiting for a handshake", open: "Open", reported: "Result pending", disputed: "Disputed", settled: "Scored", void: "Called off" };
+const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Counted", void: "Called off" };
 const LIVE = ["proposed", "open", "reported", "disputed"];
 
 /* ---------- rows → slips ---------- */
@@ -127,7 +127,7 @@ const initials = (n) => n.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toU
 function renderLedger() {
   const t = mine(), dec = t.w + t.l;
   const sc = $("#score"); sc.textContent = signed(t.score); sc.className = "big " + tone(t.score);
-  $("#scoreSub").textContent = dec || t.t ? "points across " + (dec + t.t) + " scored call" + (dec + t.t === 1 ? "" : "s") : "Nothing scored yet";
+  $("#scoreSub").textContent = dec || t.t ? "points across " + (dec + t.t) + " counted call" + (dec + t.t === 1 ? "" : "s") : "Nothing counted yet";
   $("#record").textContent = t.w + "–" + t.l + (t.t ? "–" + t.t : "");
   $("#recordSub").textContent = dec ? Math.round((t.w / dec) * 100) + "% right" + (t.t ? ", " + t.t + (t.t === 1 ? " tie" : " ties") : "") : "No decided calls yet";
   $("#inPlay").textContent = t.live;
@@ -222,12 +222,12 @@ function slip(b) {
         note = `Waiting for <b>${them}</b> to shake on it. Send them the link, or tap "We shook on it" if you agreed in person.`;
         acts = `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
       } else if (canSign(b)) {
-        note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. ${b.b.invited ? "It's waiting on your handshake." : "If that's you, shake on it to make it official."}`;
+        note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. ${b.b.invited ? "It's waiting on your handshake." : "If that's you, shake on it to book it."}`;
         acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Shake on it!</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       }
       break;
     case "open":
-      if (b.parentId) { note = `Rides on No. ${shortNo(b.parentId)}. It scores itself when that one's result is confirmed.`; if (s) acts = notifyBtn(b); }
+      if (b.parentId) { note = `Rides on No. ${shortNo(b.parentId)}. It's counted automatically when that one's result is confirmed.`; if (s) acts = notifyBtn(b); }
       else if (s && !pick) acts = `<button class="btn ${needsMe(b) ? "primary" : ""}" data-act="pick" data-id="${b.id}" ${busy}>Record result</button>${notifyBtn(b)}`;
       break;
     case "reported": {
@@ -374,7 +374,7 @@ function notifyPanel(b) {
 }
 
 /* ---------- board views ---------- */
-const FILTERS = [["all", "All"], ["needs", "Needs you"], ["live", "In play"], ["done", "Scored"], ["void", "Called off"]];
+const FILTERS = [["all", "All"], ["needs", "Needs you"], ["live", "In play"], ["done", "Counted"], ["void", "Called off"]];
 function inFilter(b, f) {
   if (f === "needs") return needsMe(b) || canSign(b);
   if (f === "live") return LIVE.includes(b.status);
@@ -450,7 +450,7 @@ function renderFeed() {
 }
 function rivalSentence(r) {
   const nm = esc(r.name);
-  if (!r.w && !r.l && !r.t) return `Nothing scored with ${nm} yet. ${r.live} call${r.live === 1 ? "" : "s"} in play.`;
+  if (!r.w && !r.l && !r.t) return `Nothing counted with ${nm} yet. ${r.live} call${r.live === 1 ? "" : "s"} in play.`;
   if (r.score > 0) return `You're up ${pts(r.score)} on ${nm}, ${r.w}–${r.l} in calls.`;
   if (r.score < 0) return `${nm} is up ${pts(-r.score)} on you, ${r.l}–${r.w} in calls. Time for a rematch.`;
   return `Dead even with ${nm} on points, ${r.w}–${r.l} in calls.`;
@@ -524,14 +524,14 @@ const ACT = {
   pick: (el) => { S.picking = el.dataset.id; S.notify = null; render(); },
   unpick: () => { S.picking = null; render(); },
   export: () => exportCsv(),
-  shook: (el) => call("mark_shook", { p_id: el.dataset.id }, "Shaken on for both of you", el.dataset.id),
+  shook: (el) => call("mark_shook", { p_id: el.dataset.id }, "Booked for both of you", el.dataset.id),
   withdraw: (el) => call("withdraw_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash offer withdrawn" : "Prediction withdrawn", el.dataset.id),
   decline: (el) => call("decline_prediction", { p_id: el.dataset.id }, "Declined", el.dataset.id),
-  sign: (el) => call("sign_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash accepted. It's on." : "You shook on it. It's official.", el.dataset.id),
+  sign: (el) => call("sign_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash accepted. Booked." : "You shook on it. Booked!", el.dataset.id),
   report: (el) => call("report_result", { p_id: el.dataset.id, p_winner: el.dataset.w }, "Result sent for confirmation", el.dataset.id),
   confirm: (el) => {
     const b = byId(el.dataset.id), w = b?.report?.winner;
-    const msg = w === "void" ? "Called off" : w === "push" ? "Tie confirmed. No points moved." : isOther(b) ? nameOf(b, w) + " wins: " + stakeLabel(b) : nameOf(b, w) + " takes " + pts(stakeOf(b));
+    const msg = w === "void" ? "Called off" : w === "push" ? "Counted. It's a tie, no points moved." : isOther(b) ? "Counted. " + nameOf(b, w) + " wins: " + stakeLabel(b) : "Counted. " + nameOf(b, w) + " takes " + pts(stakeOf(b));
     call("confirm_result", { p_id: el.dataset.id }, msg, el.dataset.id);
   },
   dispute: (el) => call("dispute_result", { p_id: el.dataset.id }, "Marked as disputed", el.dataset.id),
@@ -540,7 +540,7 @@ const ACT = {
   uncounter: () => { S.countering = null; render(); },
   cseg: (el) => { S.counterDraft.kind = el.dataset.v; render(); },
   sendCounter: (el) => sendCounter(byId(el.dataset.id)),
-  acceptCounter: (el) => { const b = byId(el.dataset.id); call("accept_counter", { p_id: el.dataset.id }, "Deal. It's on for " + (b?.counter ? counterLabel(b.counter) : "the new stakes") + ".", el.dataset.id); },
+  acceptCounter: (el) => { const b = byId(el.dataset.id); call("accept_counter", { p_id: el.dataset.id }, "Deal. Booked for " + (b?.counter ? counterLabel(b.counter) : "the new stakes") + ".", el.dataset.id); },
   withdrawCounter: (el) => call("withdraw_counter", { p_id: el.dataset.id }, "Counter taken back", el.dataset.id),
   crash: (el) => { S.crashing = el.dataset.id; S.crashSide = null; S.crashDraft = {}; render(); },
   uncrash: () => { S.crashing = null; render(); },
@@ -644,7 +644,7 @@ $("#betForm").addEventListener("submit", async (e) => {
     if (error) throw error;
     S.fresh = data; $("#sheet").hidden = true; S.tab = "board"; S.filter = "all";
     await loadBets(); render();
-    toast(shook ? "On the board, shaken on by both of you" : "On the board. Let " + withN + " know so they can shake on it.");
+    toast(shook ? "Booked for both of you" : "On the board. Let " + withN + " know so they can shake on it.");
     if (!shook && data) { S.notify = { id: data, kind: "invite" }; render(); document.getElementById("bet-" + data)?.scrollIntoView({ behavior: "smooth", block: "center" }); }
   } catch (x) { err(friendly(x)); }
   finally { btn.disabled = false; }
