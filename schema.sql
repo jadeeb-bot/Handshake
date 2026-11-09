@@ -584,3 +584,6 @@ grant execute on function public.my_invites(),
   public.create_prediction(text, text, uuid, text, text, int, text, date, text, boolean, text),
   public.sign_prediction(uuid), public.decline_prediction(uuid), public.counter_offer(uuid, text, int, text),
   public.crash_prediction(uuid, text, int) to authenticated;
+
+-- Tell the API to pick up the new and changed actions right away.
+notify pgrst, 'reload schema';

@@ -125,3 +125,6 @@ revoke all on function public.counter_offer(uuid, text, int, text), public.accep
   public.withdraw_counter(uuid) from public, anon;
 grant execute on function public.counter_offer(uuid, text, int, text), public.accept_counter(uuid),
   public.withdraw_counter(uuid), public.sign_prediction(uuid), public.mark_shook(uuid) to authenticated;
+
+-- Tell the API to pick up the new and changed actions right away.
+notify pgrst, 'reload schema';
