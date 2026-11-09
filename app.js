@@ -359,7 +359,7 @@ function message(b, kind) {
       else {
         subject = `Handshake: shake on ${t}`;
         const newbie = !b.b?.invited && !b.b?.uid;
-        body = `${them}, I'm calling it: ${t} for ${st}${due}. ${newbie ? "Sign up on Handshake with this phone number:" : "It's on Handshake:"} ${PAGE_URL} I'll be waiting on you to shake on it.`;
+        body = `${them}, I'm calling it: ${t} for ${st}${due}. ${newbie ? "Sign up on Handshake with this phone number:" : "It's on Handshake:"} ${PAGE_URL} I'll be waiting for you to shake on it.`;
         return { subject, body, to: them };
       }
       break;
@@ -713,7 +713,7 @@ function groupMessage(g) {
   const allOn = g.opps.every((o) => o.uid), someOn = g.opps.some((o) => o.uid);
   return `${listNames(g.opps.map((o) => o.name))}, I'm calling it: "${g.title}" for ${g.stake}${due}. That's me against each of you. `
     + (allOn ? `It's on Handshake: ${PAGE_URL}` : `Sign ${someOn ? "in or sign up" : "up"} on Handshake with your own phone number: ${PAGE_URL}`)
-    + ` I'll be waiting on you to shake on it.`;
+    + ` I'll be waiting for you to shake on it.`;
 }
 function groupInviteBox() {
   const g = S.groupInvite; if (!g) return "";
