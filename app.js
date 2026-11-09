@@ -155,7 +155,7 @@ function statusChip(b) {
     const t = b.status === "proposed" ? "Counter offer" : b.status === "open" ? "Record result" : b.status === "reported" ? "Confirm result" : "Sort it out";
     return `<span class="st need">${t}</span>`;
   }
-  if (canSign(b)) return `<span class="st need">${b.counter ? "Counter offer" : b.parentId ? "Crash offer" : "Sign it"}</span>`;
+  if (canSign(b)) return `<span class="st need">${b.counter ? "Counter offer" : b.parentId ? "Crash offer" : "Shake on it!"}</span>`;
   if (waitingOnMyCounter(b)) return `<span class="st">You countered</span>`;
   return `<span class="st ${["settled", "void"].includes(b.status) ? "done" : ""}">${LABEL[b.status] || b.status}</span>`;
 }
@@ -223,7 +223,7 @@ function slip(b) {
         acts = `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
       } else if (canSign(b)) {
         note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. ${b.b.invited ? "It's waiting on your signature." : "If that's you, sign to make it official."}`;
-        acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Sign as ${esc(nameOf(b, "b"))}</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
+        acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Shake on it!</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       }
       break;
     case "open":
@@ -527,7 +527,7 @@ const ACT = {
   shook: (el) => call("mark_shook", { p_id: el.dataset.id }, "Signed for both of you", el.dataset.id),
   withdraw: (el) => call("withdraw_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash offer withdrawn" : "Prediction withdrawn", el.dataset.id),
   decline: (el) => call("decline_prediction", { p_id: el.dataset.id }, "Declined", el.dataset.id),
-  sign: (el) => call("sign_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash accepted. It's on." : "Signed. It's official.", el.dataset.id),
+  sign: (el) => call("sign_prediction", { p_id: el.dataset.id }, byId(el.dataset.id)?.parentId ? "Crash accepted. It's on." : "You shook on it. It's official.", el.dataset.id),
   report: (el) => call("report_result", { p_id: el.dataset.id, p_winner: el.dataset.w }, "Result sent for confirmation", el.dataset.id),
   confirm: (el) => {
     const b = byId(el.dataset.id), w = b?.report?.winner;
