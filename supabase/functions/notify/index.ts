@@ -31,7 +31,8 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const reply = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+  (status !== 200 || (body as { sent?: number })?.sent !== undefined ? console.log("notify: result", status, JSON.stringify(body)) : null,
+  new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } }));
 
 type Entry = { t?: string; by?: string; uid?: string; what?: string };
 type Note = { title: string; body: string; tag: string };
@@ -58,8 +59,13 @@ async function apnsToken(keyId: string, teamId: string, pem: string, nowSec = Ma
 }
 
 async function sendApple(admin: Admin, userIds: string[], note: Note) {
-  if (!APNS_KEY_ID || !APNS_TEAM_ID || !APNS_PRIVATE_KEY) return 0;
-  const { data: phones } = await admin.from("app_push_devices").select("token").in("user_id", userIds);
+  if (!APNS_KEY_ID || !APNS_TEAM_ID || !APNS_PRIVATE_KEY) {
+    console.log("notify: Apple push skipped, secrets missing:", [!APNS_KEY_ID && "APNS_KEY_ID", !APNS_TEAM_ID && "APNS_TEAM_ID", !APNS_PRIVATE_KEY && "APNS_PRIVATE_KEY"].filter(Boolean).join(", "));
+    return 0;
+  }
+  const { data: phones, error: phErr } = await admin.from("app_push_devices").select("token").in("user_id", userIds);
+  if (phErr) console.error("notify: couldn't read app_push_devices", phErr.code, phErr.message);
+  console.log("notify: iPhones for", userIds.join(","), "=", phones?.length ?? 0);
   if (!phones?.length) return 0;
   const jwt = await apnsToken(APNS_KEY_ID, APNS_TEAM_ID, APNS_PRIVATE_KEY);
   let sent = 0;
@@ -77,8 +83,9 @@ async function sendApple(admin: Admin, userIds: string[], note: Note) {
         },
         body: JSON.stringify({ aps: { alert: { title: note.title, body: note.body }, sound: "default" }, prediction_id: note.tag }),
       });
-      if (res.ok) { sent++; return; }
+      if (res.ok) { sent++; console.log("APNs ok", res.status, "apns-id", res.headers.get("apns-id"), "token", token.slice(0, 8)); return; }
       const why = await res.json().catch(() => ({}));
+      console.error("APNs rejected", res.status, why?.reason, "token", token.slice(0, 8));
       if (res.status === 410 || why?.reason === "BadDeviceToken" || why?.reason === "Unregistered") {
         await admin.from("app_push_devices").delete().eq("token", token); // phone uninstalled or turned it off
       } else console.error("APNs", res.status, why?.reason);
@@ -89,8 +96,9 @@ async function sendApple(admin: Admin, userIds: string[], note: Note) {
 
 /* ---------- web push ---------- */
 async function sendWeb(admin: Admin, userIds: string[], note: Note) {
-  if (!VAPID_PRIVATE) return 0;
+  if (!VAPID_PRIVATE) { console.log("notify: web push skipped, VAPID_PRIVATE_KEY missing"); return 0; }
   const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", userIds);
+  console.log("notify: browsers for", userIds.join(","), "=", subs?.length ?? 0);
   if (!subs?.length) return 0;
   webpush.setVapidDetails(SITE_URL.replace(/\/$/, ""), VAPID_PUBLIC, VAPID_PRIVATE);
   const payload = JSON.stringify({ title: note.title, body: note.body, url: SITE_URL, tag: note.tag });
