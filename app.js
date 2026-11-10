@@ -506,7 +506,7 @@ function renderRivals() {
 }
 
 function render() {
-  renderLedger();
+  renderLedger(); renderBell();
   for (const t of ["board", "feed", "rivals"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
@@ -527,9 +527,10 @@ async function call(fn, args, okMsg, id) {
   if (id && S.busy.has(id)) return false;
   if (id) S.busy.add(id); render();
   try {
-    const { error } = await sb.rpc(fn, args);
+    const { data, error } = await sb.rpc(fn, args);
     if (error) throw error;
     S.picking = null;
+    announce(typeof data === "string" && fn === "crash_prediction" ? data : args?.p_id);
     await loadBets();
     if (okMsg) toast(okMsg);
     return true;
@@ -578,7 +579,7 @@ const ACT = {
       const xs = side(x);
       const xw = w === "push" || w === "void" ? w : w === s ? xs : other(xs);
       const { error } = await sb.rpc("report_result", { p_id: x.id, p_winner: xw });
-      if (!error) done++;
+      if (!error) { done++; announce(x.id); }
     }
     await loadBets(); render();
     toast("Result sent to " + (done + 1) + " people for confirmation" + (done < sibs.length ? ". Some couldn't be updated; check those slips." : "."));
@@ -593,6 +594,14 @@ const ACT = {
   counter: (el) => { S.countering = el.dataset.id; S.counterDraft = {}; S.notify = null; render(); },
   uncounter: () => { S.countering = null; render(); },
   pickContact: () => pickContact(),
+  bell: () => toggleBell(),
+  pushOn: () => pushOn(),
+  pushOff: () => pushOff(),
+  goto: (el) => {
+    const b = byId(el.dataset.id); toggleBell();
+    S.tab = b && mineList().includes(b) ? "board" : "feed"; S.filter = "all"; S.feedFilter = "all"; render();
+    setTimeout(() => document.getElementById("bet-" + el.dataset.id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
+  },
   addOpp: () => {
     const err = (m) => { const p = $("#formErr"); p.textContent = m; p.hidden = false; };
     $("#formErr").hidden = true;
@@ -632,7 +641,11 @@ const ACT = {
   authBack: () => setAuthNew(false),
   showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
   rename: () => { $("#gName").value = S.myName; showGate("name"); },
-  signOut: async () => { await sb.auth.signOut(); location.reload(); },
+  signOut: async () => {
+    try { const r = await navigator.serviceWorker?.getRegistration(); const s = r && (await r.pushManager.getSubscription());
+      if (s) { await sb.from("push_subscriptions").delete().eq("endpoint", s.endpoint); await s.unsubscribe(); } } catch (e) {}
+    await sb.auth.signOut(); location.reload();
+  },
 };
 document.addEventListener("input", (e) => {
   if (e.target.id === "crashPts") S.crashDraft.pts = e.target.value;
@@ -790,6 +803,7 @@ $("#betForm").addEventListener("submit", async (e) => {
       });
       if (error) throw Object.assign(error, { who: o.name });
       if (o.phone) store.set(phoneKey(o.name), o.phone);
+      if (o.uid) announce(data);
       made.push({ ...o, id: data });
     }
   } catch (x) {
@@ -842,10 +856,117 @@ function liveUpdates() {
   document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); render(); } catch (e) {} } });
 }
 
+/* ---------- what's new: activity since your last look ---------- */
+const seenKey = () => "hs-seen:" + S.me;
+function lastSeen() {
+  const v = Number(store.get(seenKey()) || 0);
+  if (!v) { const start = Date.now() - 3 * DAY; store.set(seenKey(), String(start)); return start; }
+  return v;
+}
+function involvesMe(b) { return !!(side(b) || negSide(b) || invitedMe(b) || b.a?.uid === S.me || b.counter?.uid === S.me); }
+function activity() {
+  const items = [];
+  for (const b of S.bets) {
+    if (!involvesMe(b)) continue;
+    for (const e of b.log || []) {
+      const mine = e.uid ? e.uid === S.me : (e.by || "") === S.myName;
+      if (mine || !e.t) continue;
+      const text = e.by === "Handshake" ? "Your crash " + (e.what || "updated") : (e.by || "Someone") + " " + (e.what || "made a move");
+      items.push({ t: Date.parse(e.t), text, title: b.title, id: b.id });
+    }
+  }
+  return items.sort((x, y) => y.t - x.t).slice(0, 40);
+}
+function ago(t) {
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return "now"; if (m < 60) return m + "m"; const h = Math.round(m / 60); if (h < 24) return h + "h";
+  return Math.round(h / 24) + "d";
+}
+function renderBell() {
+  const btn = $("#bellBtn"); if (!S.me || !btn) return;
+  const seen = lastSeen(), items = activity(), unread = items.filter((i) => i.t > seen).length;
+  const c = $("#bellCount"); c.hidden = !unread; c.textContent = unread > 9 ? "9+" : unread;
+  document.title = unread ? `(${unread}) Handshake` : "Handshake";
+  if ($("#bellPanel").hidden) return;
+  $("#activityList").innerHTML = items.length
+    ? items.map((i) => `<button class="act-item ${i.t > S.bellSeenAt ? "unread" : ""}" data-act="goto" data-id="${i.id}"><span class="what">${esc(i.text)}<small>${esc(i.title)}</small></span><span class="when">${ago(i.t)}</span></button>`).join("")
+    : `<p class="sub">Nothing yet. When someone shakes on, counters, declines or settles one of your predictions, it shows up here.</p>`;
+  renderPushBox();
+}
+function toggleBell() {
+  const p = $("#bellPanel");
+  if (p.hidden) { S.bellSeenAt = lastSeen(); p.hidden = false; store.set(seenKey(), String(Date.now())); renderBell(); p.scrollIntoView({ behavior: "smooth", block: "start" }); }
+  else { p.hidden = true; renderBell(); }
+}
+
+/* ---------- push notifications ---------- */
+const VAPID = window.HANDSHAKE_CONFIG?.vapidPublicKey || "";
+const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const standalone = () => window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+const pushSupported = () => !IN_APP && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && !!VAPID;
+let swReg = null;
+if (!IN_APP && "serviceWorker" in navigator && /^https?:$/.test(location.protocol)) {
+  navigator.serviceWorker.register("sw.js").then((r) => { swReg = r; renderPushBox(); }).catch(() => {});
+  navigator.serviceWorker.addEventListener?.("message", (e) => { if (e.data?.type === "refresh") loadBets().then(render).catch(() => {}); });
+}
+async function pushStatus() {
+  if (IN_APP) return "app";
+  if (isIOS && !standalone()) return "ios-home";
+  if (!pushSupported()) return "unsupported";
+  if (Notification.permission === "denied") return "denied";
+  try { const r = swReg || (await navigator.serviceWorker.getRegistration()); if (r && (await r.pushManager.getSubscription())) return "on"; } catch (e) {}
+  return "off";
+}
+async function renderPushBox() {
+  const box = $("#pushBox"); if (!box || $("#bellPanel").hidden) return;
+  const st = await pushStatus();
+  const html = {
+    on: `<span>Notifications are on for this device.</span><button class="btn quiet" data-act="pushOff">Turn off</button>`,
+    off: `<span>Get a notification when someone shakes on, counters or declines your predictions.</span><button class="btn primary" data-act="pushOn">Turn on notifications</button>`,
+    "ios-home": `<span>On iPhone, notifications work once Handshake is on your Home Screen. In Safari, tap <b>Share</b>, then <b>Add to Home Screen</b>, open Handshake from there, and come back here.</span>`,
+    denied: `<span>Notifications are blocked for this site. Allow them in your browser's site settings, then reload.</span>`,
+    unsupported: `<span>This browser can't show notifications from websites.</span>`,
+    app: "",
+  }[st];
+  box.className = html ? "pushbox" : ""; box.innerHTML = html || "";
+}
+function keyBytes(b64) {
+  const s = (b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+}
+async function pushOn() {
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { toast("Notifications weren't allowed. You can change that in your browser's site settings."); return renderPushBox(); }
+    const reg = swReg || (await navigator.serviceWorker.ready);
+    const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(VAPID) }));
+    const j = sub.toJSON();
+    const { error } = await sb.from("push_subscriptions").upsert({ endpoint: j.endpoint, user_id: S.me, p256dh: j.keys.p256dh, auth: j.keys.auth });
+    if (error) throw error;
+    toast("Notifications are on for this device.");
+  } catch (e) { toast("Couldn't turn on notifications: " + (e?.message || e)); }
+  renderPushBox();
+}
+async function pushOff() {
+  try {
+    const reg = swReg || (await navigator.serviceWorker.getRegistration());
+    const sub = reg && (await reg.pushManager.getSubscription());
+    if (sub) { await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint); await sub.unsubscribe(); }
+    toast("Notifications are off for this device.");
+  } catch (e) { toast("Couldn't turn off notifications. Try again."); }
+  renderPushBox();
+}
+/* tell the other side about what just happened; never blocks or bothers the person acting */
+function announce(predictionId) {
+  if (!sb || !predictionId) return;
+  sb.functions.invoke("notify", { body: { prediction_id: predictionId } }).catch(() => {});
+}
+
 /* ---------- sign-in ---------- */
 function showGate(which) {
   $("#gatePhone").hidden = which !== "phone"; $("#gateCode").hidden = which !== "code"; $("#gateName").hidden = which !== "name";
-  $("#app").hidden = !!which; $("#newBtn").hidden = !!which; $("#who").hidden = !!which;
+  $("#app").hidden = !!which; $("#newBtn").hidden = !!which; $("#who").hidden = !!which; $("#bellBtn").hidden = !!which;
+  if (which) $("#bellPanel").hidden = true;
   const f = which === "phone" ? "#gPhone" : which === "code" ? "#gCode" : which === "name" ? "#gName" : null;
   if (f) setTimeout(() => $(f).focus(), 50);
 }

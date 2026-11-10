@@ -1,0 +1,14 @@
+{
+  "name": "Handshake",
+  "short_name": "Handshake",
+  "description": "Call it. Shake on it. Take it to the bank.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#DCE3EA",
+  "theme_color": "#2340C8",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

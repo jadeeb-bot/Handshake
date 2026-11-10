@@ -15,7 +15,7 @@ Anyone can play from a link. Players sign up with their mobile number and a pass
 | `schema.sql` | The database: tables, access rules, and every action (sign, counter, report, confirm, crash) |
 | `update-*.sql` | Updates for a database that's already set up. Run each new one once in the SQL Editor. |
 
-Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`.
+Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`, then `update-notifications.sql`.
 
 All the rules live in the database, so nobody can edit a prediction except through the normal buttons.
 
@@ -52,6 +52,15 @@ From now on, every change pushed to GitHub goes live on its own within a minute.
 4. In Supabase, open **Authentication → Sign In / Providers → Phone**, turn it on, choose **Twilio Verify** as the SMS provider, paste the three values, and save.
 
 Until this is set up, the sign-in screen tells people to use email instead.
+
+## Push notifications
+
+The site can push a notification when someone shakes on, counters, declines or settles one of your predictions. Players turn it on from the bell at the top. On iPhone it only works after adding Handshake to the Home Screen (Safari: Share, then Add to Home Screen).
+
+Sending happens in a Supabase Edge Function, `supabase/functions/notify/index.ts`:
+
+1. In Supabase, open **Edge Functions**, create a function named exactly `notify`, paste in that file, and deploy it.
+2. Under **Edge Functions → Secrets**, add `VAPID_PRIVATE_KEY` with the private key you were given. Keep it secret; anyone with it could send notifications as Handshake. The matching public key is already in `config.js`.
 
 ## Good to know
 
