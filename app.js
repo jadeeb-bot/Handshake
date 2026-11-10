@@ -62,6 +62,7 @@ function fromRow(r) {
     a: { name: r.a_name, uid: r.a_uid },
     b: { name: r.b_name, uid: r.b_uid, invited: r.b_invited, proxy: r.b_proxy, signed: !!(r.b_uid || r.b_proxy) },
     status: r.status, report: r.report_winner ? { winner: r.report_winner, by: r.report_by } : null, winner: r.winner,
+    disputeBy: r.dispute_by ? Date.parse(r.dispute_by) : null,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
     counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
     shakeBy: r.shake_by ? Date.parse(r.shake_by) : null,
@@ -268,10 +269,11 @@ function slip(b) {
       const r = b.report, by = esc(nameOf(b, r.by));
       const what = (w) => (w === "push" ? "it's a tie" : w === "void" ? "to call it off" : w === s ? "you won" : esc(nameOf(b, w)) + " won");
       if (s && r.by !== s) {
-        note = `<b>${by}</b> says ${r.winner === "void" ? "call it off" : what(r.winner)}. Agree?`;
+        const window_ = b.disputeBy ? ` You have until <b>${esc(deadlineText(b.disputeBy))}</b> (${timeLeft(b.disputeBy)}) to dispute it. After that, it counts.` : "";
+        note = `<b>${by}</b> says ${r.winner === "void" ? "call it off" : what(r.winner)}.${window_}`;
         acts = `<button class="btn primary" data-act="confirm" data-id="${b.id}" ${busy}>Confirm</button><button class="btn danger" data-act="dispute" data-id="${b.id}" ${busy}>Dispute</button>`;
       } else if (s) {
-        note = `You said ${what(r.winner)}. Waiting for ${them} to confirm.`;
+        note = `You said ${what(r.winner)}. Waiting for ${them} to confirm.${b.disputeBy ? ` If ${them} doesn't dispute it, it counts on ${esc(deadlineText(b.disputeBy))}.` : ""}`;
         acts = notifyBtn(b) + (!b[o]?.uid ? `<button class="btn" data-act="confirm" data-id="${b.id}" ${busy}>${them} agreed in person</button>` : "") + `<button class="btn quiet" data-act="pick" data-id="${b.id}">Change result</button>`;
       } else note = `${by} recorded a result. Waiting on the other side.`;
       if (pick) acts = "";
@@ -425,7 +427,7 @@ function message(b, kind) {
         ? `${them}, I'll take the other side of ${t}, but for ${counterLabel(b.counter)} instead of ${st}. Accept or counter on Handshake:`
         : `${them}, how about ${counterLabel(b.counter)} instead on ${t}? Accept or counter on Handshake:`;
       break;
-    case "confirm": subject = `Handshake: confirm the result of ${t}`; body = `${them}, I recorded the result of ${t}: ${claim(b.report?.winner)}. Confirm or dispute it on Handshake:`; break;
+    case "confirm": subject = `Handshake: confirm the result of ${t}`; body = `${them}, I recorded the result of ${t}: ${claim(b.report?.winner)}.${b.disputeBy ? ` You have until ${deadlineText(b.disputeBy)} to dispute it. After that, it counts.` : ""} Confirm or dispute it on Handshake:`; break;
     case "dispute": subject = `Handshake: ${t} is disputed`; body = `${them}, I disputed the result of ${t}. Let's sort it out, then one of us can record it again:`; break;
     case "final":
       subject = `Handshake: final on ${t}`;
@@ -899,6 +901,7 @@ function exportCsv() {
 
 /* ---------- data loading ---------- */
 async function loadBets() {
+  try { await sb.rpc("settle_overdue"); } catch (e) {}  // results nobody disputed in 24 hours count now
   const { data, error } = await sb.from("predictions").select("*").order("created_at", { ascending: false }).limit(2000);
   if (error) throw error;
   S.bets = data.map(fromRow); S.loaded = true;
@@ -935,7 +938,8 @@ function activity() {
     for (const e of b.log || []) {
       const mine = e.uid ? e.uid === S.me : (e.by || "") === S.myName;
       if (mine || !e.t) continue;
-      const text = e.by === "Handshake" ? "Your crash " + (e.what || "updated") : (e.by || "Someone") + " " + (e.what || "made a move");
+      const auto = e.what || "updated";
+      const text = e.by === "Handshake" ? (b.parentId ? "Your crash " + auto : auto[0].toUpperCase() + auto.slice(1)) : (e.by || "Someone") + " " + (e.what || "made a move");
       items.push({ t: Date.parse(e.t), text, title: b.title, id: b.id });
     }
   }

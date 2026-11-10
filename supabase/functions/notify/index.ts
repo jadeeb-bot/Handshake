@@ -70,7 +70,8 @@ Deno.serve(async (req) => {
   webpush.setVapidDetails(SITE_URL.replace(/\/$/, ""), VAPID_PUBLIC, VAPID_PRIVATE);
   const payload = JSON.stringify({
     title: p.title,
-    body: `${last.by ?? "Someone"} ${last.what ?? "made a move"}`,
+    body: `${last.by ?? "Someone"} ${last.what ?? "made a move"}`
+      + (/^recorded:/.test(last.what ?? "") ? ". You have 24 hours to dispute it. After that, it counts." : ""),
     url: SITE_URL,
     tag: p.id,
   });
