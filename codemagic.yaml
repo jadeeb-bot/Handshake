@@ -1,7 +1,7 @@
 # Codemagic builds the Handshake iPhone app (in mobile/) and sends it to TestFlight.
 # Before the first build, in Codemagic:
-#   Teams > Integrations > Developer Portal: add your App Store Connect API key, named "Handshake API key".
-#   Then fill in APP_STORE_APPLE_ID below with the app's Apple ID from App Store Connect.
+#   Integrations > Developer Portal: add your App Store Connect API key, named "Handshake API key".
+# APP_STORE_APPLE_ID below is the app's Apple ID from App Store Connect (App Information).
 workflows:
   ios-testflight:
     name: iPhone app to TestFlight
@@ -14,7 +14,7 @@ workflows:
         distribution_type: app_store
         bundle_identifier: com.jadeeb.handshake
       vars:
-        APP_STORE_APPLE_ID: "0000000000"
+        APP_STORE_APPLE_ID: "6832786975"
       node: 22
       xcode: latest
     scripts:
