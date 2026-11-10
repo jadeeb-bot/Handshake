@@ -1071,3 +1071,11 @@ grant execute on function public.settle_up(uuid, text), public.request_settlemen
 
 -- Tell the API to pick up the changes right away.
 notify pgrst, 'reload schema';
+
+-- The notify function's server key (service_role) needs to read players, predictions and
+-- devices, and remove dead devices. New tables aren't given to any role automatically.
+grant usage on schema public to service_role;
+grant select, insert, update, delete on
+  public.profiles, public.predictions, public.prediction_invites, public.push_subscriptions,
+  public.app_push_devices, public.settlements, public.settlement_requests
+to service_role;
