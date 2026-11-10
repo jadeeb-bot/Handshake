@@ -135,8 +135,9 @@ async function settleNote(admin: Admin, caller: string, body: { settlement_reque
   }
 
   if (!isId(body.settlement_request_id)) return reply(400, { error: "settlement_request_id is wrong." });
-  const { data: q } = await admin.from("settlement_requests").select("*").eq("id", body.settlement_request_id).maybeSingle();
-  if (!q) return reply(404, { error: "That settle-up no longer exists." });
+  const { data: q, error: qErr } = await admin.from("settlement_requests").select("*").eq("id", body.settlement_request_id).maybeSingle();
+  if (qErr) { console.error("notify: couldn't read settle-up", body.settlement_request_id, qErr.code, qErr.message); return reply(500, { error: qErr.message, code: qErr.code }); }
+  if (!q) { console.error("notify: no settle-up with id", body.settlement_request_id, "caller", caller); return reply(404, { error: "That settle-up no longer exists." }); }
   if (![q.requester_uid, q.creditor_uid].includes(caller)) return reply(403, { error: "That isn't your settle-up." });
   const down = await nameOf(q.requester_uid), up = await nameOf(q.creditor_uid);
 
@@ -185,8 +186,9 @@ Deno.serve(async (req) => {
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
   const { data: who, error: authErr } = await admin.auth.getUser(token);
-  if (authErr || !who?.user) return reply(401, { error: "Sign in first." });
+  if (authErr || !who?.user) { console.error("notify: sign-in check failed", authErr?.message); return reply(401, { error: "Sign in first." }); }
   const caller = who.user.id;
+  console.log("notify: from", caller, "key type", SERVICE_KEY.startsWith("sb_secret_") ? "secret" : SERVICE_KEY.startsWith("eyJ") ? "legacy service_role" : "unknown");
 
   let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
@@ -213,8 +215,9 @@ Deno.serve(async (req) => {
     return reply(200, { sent });
   }
 
-  const { data: p } = await admin.from("predictions").select("*").eq("id", predictionId).maybeSingle();
-  if (!p) return reply(404, { error: "That prediction no longer exists." });
+  const { data: p, error: pErr } = await admin.from("predictions").select("*").eq("id", predictionId).maybeSingle();
+  if (pErr) { console.error("notify: couldn't read prediction", predictionId, pErr.code, pErr.message); return reply(500, { error: pErr.message, code: pErr.code }); }
+  if (!p) { console.error("notify: no prediction with id", predictionId, "caller", caller); return reply(404, { error: "That prediction no longer exists." }); }
 
   const involved = [p.a_uid, p.b_uid, p.b_invited, p.counter_uid].includes(caller);
   if (!involved) return reply(403, { error: "You're not part of this prediction." });
