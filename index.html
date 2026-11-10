@@ -322,6 +322,9 @@ a.btn.primary{color:var(--slip)}
           </div>
           <div class="field"><label for="fTerms">How do we decide? <span class="hint">optional, settles arguments later</span></label>
             <textarea id="fTerms" maxlength="240" placeholder="Final score per ESPN. Overtime counts."></textarea></div>
+          <div class="field" id="shakeByWrap"><label for="fShakeBy">Shake by <span class="hint">after this, the invite expires</span></label>
+            <input id="fShakeBy" type="datetime-local">
+            <div class="quick" id="shakeQuick"></div></div>
           <label class="check"><input type="checkbox" id="fShook"><span>We already shook on it in person. Book it for both of us.</span></label>
           <p class="err" id="formErr" hidden></p>
           <div class="acts"><button class="btn primary" type="submit" id="saveBtn">Add to the board</button><button class="btn ghost" type="button" data-act="cancel">Cancel</button></div>

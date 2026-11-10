@@ -15,7 +15,7 @@ Anyone can play from a link. Players sign up with their mobile number and a pass
 | `schema.sql` | The database: tables, access rules, and every action (sign, counter, report, confirm, crash) |
 | `update-*.sql` | Updates for a database that's already set up. Run each new one once in the SQL Editor. |
 
-Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`, then `update-notifications.sql`.
+Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`, then `update-notifications.sql`, then `update-shake-deadline.sql`.
 
 All the rules live in the database, so nobody can edit a prediction except through the normal buttons.
 

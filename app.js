@@ -31,11 +31,28 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {}, fixing: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
+  notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
 const LIVE = ["proposed", "open", "reported", "disputed"];
+/* an invite nobody shook on before its shake-by time */
+const expired = (b) => b.status === "proposed" && !!b.shakeBy && Date.now() > b.shakeBy;
+const isLive = (b) => LIVE.includes(b.status) && !expired(b);
+/* "Tue, Nov 10 at 7:00 PM PST" in the reader's own time zone */
+function deadlineText(ms) {
+  const d = new Date(ms);
+  const day = d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  return day + " at " + time;
+}
+function timeLeft(ms) {
+  const m = Math.round((ms - Date.now()) / 60000);
+  if (m <= 0) return "expired";
+  if (m < 60) return m + " min left";
+  const h = Math.round(m / 60); if (h < 48) return h + " hr left";
+  return Math.round(h / 24) + " days left";
+}
 
 /* ---------- rows → slips ---------- */
 function fromRow(r) {
@@ -47,6 +64,7 @@ function fromRow(r) {
     status: r.status, report: r.report_winner ? { winner: r.report_winner, by: r.report_by } : null, winner: r.winner,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
     counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
+    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null,
     createdAt: Date.parse(r.created_at), decidedAt: r.decided_at ? Date.parse(r.decided_at) : null, log: r.log || [],
   };
 }
@@ -61,7 +79,7 @@ const nameOf = (b, s) => (b[s]?.name || "Someone").trim();
 const shortNo = (id) => String(id).replace(/-/g, "").slice(-4).toUpperCase();
 const scored = (b) => b.status === "settled" && b.winner;
 function needsMe(b) {
-  if (b.status === "proposed" && b.counter?.by === "b" && b.a?.uid === S.me) return true;
+  if (b.status === "proposed" && b.counter?.by === "b" && b.a?.uid === S.me) return !expired(b);
   const s = side(b); if (!s) return false;
   if (b.status === "open") return !b.parentId && !!b.due && b.due <= today();
   if (b.status === "reported") return b.report && b.report.by !== s;
@@ -69,14 +87,14 @@ function needsMe(b) {
   return false;
 }
 const invitedMe = (b) => (b.b?.invited ? b.b.invited === S.me : S.myInvites.has(b.id));
-const canSign = (b) => b.status === "proposed" && !!S.me && !b.b?.uid && b.a?.uid !== S.me && invitedMe(b) && b.counter?.by !== "b";
+const canSign = (b) => b.status === "proposed" && !!S.me && !b.b?.uid && b.a?.uid !== S.me && invitedMe(b) && b.counter?.by !== "b" && !expired(b);
 const counterLabel = (c) => (c.kind === "other" ? c.text || "Bragging rights" : pts(c.points));
 /* who I am while terms are still being worked out: the caller, or the invitee who's negotiating */
 const negSide = (b) => side(b) || (b.status === "proposed" && S.me && (b.counter?.uid === S.me || invitedMe(b)) ? "b" : null);
 const waitingOnMyCounter = (b) => b.status === "proposed" && !!b.counter && negSide(b) === b.counter.by;
 const kids = (b) => S.bets.filter((x) => x.parentId === b.id);
 const liveKids = (b) => kids(b).filter((x) => x.status !== "void");
-const crashable = (b) => ["proposed", "open"].includes(b.status) && !b.parentId && !!S.me && !side(b) && !invitedMe(b) && b.counter?.uid !== S.me && !liveKids(b).some((k) => k.a?.uid === S.me);
+const crashable = (b) => ["proposed", "open"].includes(b.status) && !expired(b) && !b.parentId && !!S.me && !side(b) && !invitedMe(b) && b.counter?.uid !== S.me && !liveKids(b).some((k) => k.a?.uid === S.me);
 /* other one-on-ones from the same group call: same caller, call and deadline, made together */
 const siblings = (b) => (b.parentId || !side(b) ? [] : S.bets.filter((x) => x.id !== b.id && !x.parentId && x.a.uid === b.a.uid && x.title === b.title
   && x.due === b.due && Math.abs((x.createdAt || 0) - (b.createdAt || 0)) < 10 * 60e3 && side(x) && ["open", "disputed"].includes(x.status) && !x.report));
@@ -87,7 +105,7 @@ function mine() {
   let score = 0, w = 0, l = 0, t = 0, live = 0, atStake = 0;
   for (const b of S.bets) {
     const s = side(b); if (!s) continue;
-    if (LIVE.includes(b.status)) { live++; atStake += stakeOf(b); }
+    if (isLive(b)) { live++; atStake += stakeOf(b); }
     if (!scored(b)) continue;
     if (b.winner === "push") t++;
     else if (b.winner === s) { w++; score += stakeOf(b); }
@@ -119,7 +137,7 @@ function rivals() {
     const o = other(s), k = b[o]?.uid || "name:" + nameOf(b, o).toLowerCase();
     if (!m.has(k)) m.set(k, { name: personName(b[o]?.uid) || nameOf(b, o), uid: b[o]?.uid || null, score: 0, w: 0, l: 0, t: 0, live: 0, last: 0 });
     const r = m.get(k); r.last = Math.max(r.last, b.createdAt || 0);
-    if (LIVE.includes(b.status)) r.live++;
+    if (isLive(b)) r.live++;
     if (!scored(b)) continue;
     if (b.winner === "push") r.t++;
     else if (b.winner === s) { r.w++; r.score += stakeOf(b); }
@@ -147,6 +165,10 @@ function renderLedger() {
 
 /* ---------- slips ---------- */
 function dueText(b) {
+  if (b.status === "proposed" && b.shakeBy && !expired(b)) {
+    const soon = b.shakeBy - Date.now() < 6 * 3600e3;
+    return `<span class="meta ${soon ? "late" : ""}">Shake by ${esc(deadlineText(b.shakeBy))} (${timeLeft(b.shakeBy)})</span>`;
+  }
   if (!b.due) return "";
   const d = daysBetween(today(), b.due);
   if (b.status === "open" || b.status === "proposed") {
@@ -162,6 +184,7 @@ function statusChip(b) {
     const t = b.status === "proposed" ? "Counter offer" : b.status === "open" ? "Record result" : b.status === "reported" ? "Confirm result" : "Sort it out";
     return `<span class="st need">${t}</span>`;
   }
+  if (expired(b)) return `<span class="st done">Expired</span>`;
   if (canSign(b)) return `<span class="st need">${b.counter ? "Counter offer" : b.parentId ? "Crash offer" : "Shake on it!"}</span>`;
   if (waitingOnMyCounter(b)) return `<span class="st">You countered</span>`;
   return `<span class="st ${["settled", "void"].includes(b.status) ? "done" : ""}">${LABEL[b.status] || b.status}</span>`;
@@ -178,6 +201,7 @@ function crashLine(b) {
 }
 function notifyKind(b) {
   const s = negSide(b); if (!s) return null;
+  if (expired(b)) return null;
   if (waitingOnMyCounter(b)) return "counter";
   if (b.status === "proposed" && s === "a") return "invite";
   if (b.status === "proposed") return null;
@@ -207,7 +231,10 @@ function slip(b) {
 
   switch (b.status) {
     case "proposed":
-      if (b.counter) {
+      if (expired(b)) {
+        note = `This invite expired on ${deadlineText(b.shakeBy)}. Nobody shook on it in time.`;
+        if (s === "a" && !b.parentId) acts = S.extending === b.id ? "" : `<button class="btn primary" data-act="extend" data-id="${b.id}">Set a new shake-by time</button><button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
+      } else if (b.counter) {
         const ns = negSide(b), c = esc(counterLabel(b.counter)), was = esc(stakeLabel(b));
         const caller = esc(nameOf(b, "a")), invitee = esc(nameOf(b, "b"));
         if (ns && ns !== b.counter.by) {
@@ -291,6 +318,7 @@ function slip(b) {
     ${picker}
     ${S.countering === b.id ? counterPanel(b) : ""}
     ${S.fixing === b.id ? fixPanel(b) : ""}
+    ${S.extending === b.id ? extendPanel(b) : ""}
     ${S.notify?.id === b.id && negSide(b) ? notifyPanel(b) : ""}
   </article>`;
 }
@@ -313,6 +341,30 @@ function counterPanel(b) {
     <p class="err" id="counterErr" hidden></p>
     <div class="acts"><button class="btn primary" data-act="sendCounter" data-id="${b.id}">Send counter</button><button class="btn ghost" data-act="uncounter">Cancel</button></div>
   </div>`;
+}
+function extendPanel(b) {
+  return `<div class="cpanel">
+    <span class="lab">New shake-by time</span>
+    <div class="field"><label for="xShakeBy">Shake by</label><input id="xShakeBy" type="datetime-local" value="${localInput(Date.now() + DAY)}"></div>
+    <p class="err" id="extendErr" hidden></p>
+    <div class="acts"><button class="btn primary" data-act="saveExtend" data-id="${b.id}">Save</button><button class="btn ghost" data-act="unextend">Cancel</button></div>
+  </div>`;
+}
+/* value for a datetime-local input, in local time, rounded up to the next quarter hour */
+function localInput(ms) {
+  const d = new Date(Math.ceil(ms / 900000) * 900000);
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function readShakeBy(id) {
+  const v = $(id)?.value; if (!v) return null;
+  const ms = new Date(v).getTime(); return Number.isFinite(ms) ? ms : null;
+}
+async function saveExtend(b) {
+  const err = (m) => { const e = $("#extendErr"); if (e) { e.textContent = m; e.hidden = false; } };
+  const ms = readShakeBy("#xShakeBy");
+  if (!ms || ms <= Date.now() + 60000) return err("Pick a time that hasn't passed yet.");
+  const ok = await call("set_shake_by", { p_id: b.id, p_shake_by: new Date(ms).toISOString() }, "New deadline set. Send them a fresh invite.", b.id);
+  if (ok) { S.extending = null; S.notify = { id: b.id, kind: "invite" }; render(); }
 }
 function fixPanel(b) {
   const num = store.get(phoneKey(nameOf(b, "b"))) || "";
@@ -362,7 +414,8 @@ function message(b, kind) {
       else {
         subject = `Handshake: shake on ${t}`;
         const newbie = !b.b?.invited && !b.b?.uid;
-        body = `${them}, I'm calling it: ${t} for ${st}${due}. ${newbie ? "Sign up on Handshake with this phone number:" : "It's on Handshake:"} ${PAGE_URL} I'll be waiting for you to shake on it.`;
+        const until = b.shakeBy ? ` You have until ${deadlineText(b.shakeBy)}.` : "";
+        body = `${them}, I'm calling it: ${t} for ${st}${due}.${until} ${newbie ? "Sign up on Handshake with this phone number:" : "It's on Handshake:"} ${PAGE_URL} I'll be waiting for you to shake on it.`;
         return { subject, body, to: them };
       }
       break;
@@ -407,12 +460,12 @@ function notifyPanel(b) {
 const FILTERS = [["all", "All"], ["needs", "Needs you"], ["live", "In play"], ["done", "Done and done"], ["void", "Called off"]];
 function inFilter(b, f) {
   if (f === "needs") return needsMe(b) || canSign(b);
-  if (f === "live") return LIVE.includes(b.status);
+  if (f === "live") return isLive(b);
   if (f === "done") return b.status === "settled";
-  if (f === "void") return b.status === "void";
+  if (f === "void") return b.status === "void" || expired(b);
   return true;
 }
-const rank = (b) => (needsMe(b) || canSign(b) ? 0 : LIVE.includes(b.status) ? 1 : 2);
+const rank = (b) => (needsMe(b) || canSign(b) ? 0 : isLive(b) ? 1 : 2);
 function sorted(list) {
   const by = {
     newest: (a, b) => (b.createdAt || 0) - (a.createdAt || 0),
@@ -471,7 +524,7 @@ function crashPanel(b) {
 const FEED_FILTERS = [["crash", "Open to crash"], ["live", "In play"], ["all", "Everything"]];
 function renderFeed() {
   if (!S.bets.length) return `<div class="empty"><h3>Nothing on the board yet</h3><p>Every prediction from everyone playing shows up here, newest first. Pending ones can be crashed.</p></div>`;
-  const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? LIVE.includes(b.status) : true);
+  const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
   const list = S.bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const chips = FEED_FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.feedFilter === k}" data-act="feedFilter" data-v="${k}">${l} <span class="mono">${S.bets.filter((b) => pass(b, k)).length}</span></button>`).join("");
   const empty = S.feedFilter === "crash" ? `<div class="empty"><p>Nothing open to crash right now. Predictions you're already in, or have crashed, don't show here.</p></div>` : `<div class="empty"><p>Nothing here right now.</p></div>`;
@@ -617,6 +670,10 @@ const ACT = {
     catch (e) { const el = $("#groupText"); if (el) { const r = document.createRange(); r.selectNodeContents(el); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } toast("Press and hold the highlighted message, then tap Copy."); }
   },
   closeGroup: () => { S.groupInvite = null; render(); },
+  extend: (el) => { S.extending = el.dataset.id; S.notify = null; render(); },
+  unextend: () => { S.extending = null; render(); },
+  saveExtend: (el) => saveExtend(byId(el.dataset.id)),
+  shakeIn: (el) => { $("#fShakeBy").value = localInput(Date.now() + Number(el.dataset.h) * 3600e3); },
   fix: (el) => { S.fixing = el.dataset.id; S.notify = null; render(); },
   unfix: () => { S.fixing = null; render(); },
   saveFix: (el) => saveFix(byId(el.dataset.id)),
@@ -675,6 +732,8 @@ async function sendCrash(b) {
 
 /* ---------- new prediction ---------- */
 $("#quick").innerHTML = [5, 10, 25, 50, 100].map((q) => `<button type="button" class="chipbtn" data-act="quick" data-v="${q}">${q}</button>`).join("");
+$("#shakeQuick").innerHTML = [[1, "In 1 hour"], [3, "In 3 hours"], [24, "In 1 day"], [72, "In 3 days"]].map(([h, l]) => `<button type="button" class="chipbtn" data-act="shakeIn" data-h="${h}">${l}</button>`).join("");
+$("#fShook").addEventListener("change", (e) => { $("#shakeByWrap").hidden = e.target.checked; });
 function setKind(k) {
   S.stakeKind = k;
   $("#segPts").setAttribute("aria-pressed", k === "points"); $("#segOther").setAttribute("aria-pressed", k === "other");
@@ -759,7 +818,8 @@ const listNames = (ns) => (ns.length < 2 ? ns.join("") : ns.slice(0, -1).join(",
 function groupMessage(g) {
   const due = g.due ? `, decided by ${niceDate(g.due)}` : "";
   const allOn = g.opps.every((o) => o.uid), someOn = g.opps.some((o) => o.uid);
-  return `${listNames(g.opps.map((o) => o.name))}, I'm calling it: "${g.title}" for ${g.stake}${due}. That's me against each of you. `
+  const until = g.shakeBy ? ` You have until ${deadlineText(g.shakeBy)}.` : "";
+  return `${listNames(g.opps.map((o) => o.name))}, I'm calling it: "${g.title}" for ${g.stake}${due}. That's me against each of you.${until} `
     + (allOn ? `It's on Handshake: ${PAGE_URL}` : `Sign ${someOn ? "in or sign up" : "up"} on Handshake with your own phone number: ${PAGE_URL}`)
     + ` I'll be waiting for you to shake on it.`;
 }
@@ -774,7 +834,7 @@ function openSheet(withName, uid) {
   $("#pickContactBtn").hidden = !canPickContacts;
   $("#betForm").reset(); $("#formErr").hidden = true; setKind("points"); S.opps = []; renderOpps();
   S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = false;
-  $("#fDue").value = addDays(7); $("#fPts").value = 10;
+  $("#fDue").value = addDays(7); $("#fPts").value = 10; $("#fShakeBy").value = localInput(Date.now() + DAY); $("#shakeByWrap").hidden = false;
   if (withName) { if (uid) pickPerson(uid, withName); else $("#fWith").value = withName; }
   $("#sheet").hidden = false; $("#sheet").scrollIntoView({ behavior: "smooth", block: "start" });
   setTimeout(() => $("#fTitle").focus({ preventScroll: true }), 250);
@@ -788,6 +848,9 @@ $("#betForm").addEventListener("submit", async (e) => {
   if (S.stakeKind === "points" && !(p >= 1 && p <= 1000)) return err("Put between 1 and 1,000 points on the line.");
   if (S.stakeKind === "other" && !otherText) return err("Say what the loser owes, like “Loser buys the first round.”");
   const shook = $("#fShook").checked;
+  const shakeBy = shook ? null : readShakeBy("#fShakeBy");
+  if (!shook && !shakeBy) return err("Pick a shake-by time so they know how long they have.");
+  if (!shook && shakeBy <= Date.now() + 60000) return err("Pick a shake-by time that hasn't passed yet.");
   const cur = currentOpp();
   if (cur) { const bad = checkOpp(cur, shook); if (bad) return err(bad); }
   const opps = cur ? [...S.opps, cur] : S.opps.slice();
@@ -800,6 +863,7 @@ $("#betForm").addEventListener("submit", async (e) => {
         p_title: title, p_with_name: o.name, p_invited: o.uid, p_invited_phone: o.phone,
         p_category: $("#fCat").value, p_stake_kind: S.stakeKind, p_points: S.stakeKind === "points" ? p : 0,
         p_stake_text: S.stakeKind === "other" ? otherText : "", p_due: $("#fDue").value || null, p_terms: $("#fTerms").value.trim(), p_shook: shook,
+        p_shake_by: shakeBy ? new Date(shakeBy).toISOString() : null,
       });
       if (error) throw Object.assign(error, { who: o.name });
       if (o.phone) store.set(phoneKey(o.name), o.phone);
@@ -814,7 +878,7 @@ $("#betForm").addEventListener("submit", async (e) => {
   btn.disabled = false;
   S.fresh = made[0]?.id; $("#sheet").hidden = true; S.tab = "board"; S.filter = "all"; S.opps = [];
   const stake = S.stakeKind === "points" ? pts(p) : otherText;
-  if (!shook && made.length > 1) S.groupInvite = { title, stake, due: $("#fDue").value || "", opps: made };
+  if (!shook && made.length > 1) S.groupInvite = { title, stake, due: $("#fDue").value || "", shakeBy, opps: made };
   else if (!shook && made[0]) S.notify = { id: made[0].id, kind: "invite" };
   await loadBets(); render();
   if (shook) toast(made.length > 1 ? "Booked with " + listNames(made.map((m) => m.name)) + "." : "Booked for both of you");
