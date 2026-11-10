@@ -1,0 +1,9 @@
+{
+  "appId": "com.jadeeb.handshake",
+  "appName": "Handshake",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "backgroundColor": "#DCE3EA"
+  }
+}

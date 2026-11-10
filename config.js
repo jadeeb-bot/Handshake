@@ -3,4 +3,6 @@
 window.HANDSHAKE_CONFIG = {
   supabaseUrl: "https://akgrilycmjrskuqelhju.supabase.co",
   supabaseAnonKey: "sb_publishable_Yayho6daHucOZ045Wq0j6Q_SHDGTdYu",
+  // The public website. Invites from the iPhone app link here.
+  siteUrl: "https://handshake-rho-ten.vercel.app/",
 };

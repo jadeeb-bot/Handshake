@@ -16,7 +16,10 @@ const store = {
   get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
 };
-const PAGE_URL = location.origin + location.pathname.replace(/index\.html$/, "");
+const IN_APP = !!window.Capacitor?.isNativePlatform?.();
+const PAGE_URL = IN_APP || !/^https?:$/.test(location.protocol)
+  ? (window.HANDSHAKE_CONFIG?.siteUrl || "https://handshake-rho-ten.vercel.app/")
+  : location.origin + location.pathname.replace(/index\.html$/, "");
 
 /* ---------- setup ---------- */
 const CFG = window.HANDSHAKE_CONFIG || {};
@@ -589,6 +592,7 @@ const ACT = {
   callOff: (el) => call("report_result", { p_id: el.dataset.id, p_winner: "void" }, "Asked to call it off", el.dataset.id),
   counter: (el) => { S.countering = el.dataset.id; S.counterDraft = {}; S.notify = null; render(); },
   uncounter: () => { S.countering = null; render(); },
+  pickContact: () => pickContact(),
   addOpp: () => {
     const err = (m) => { const p = $("#formErr"); p.textContent = m; p.hidden = false; };
     $("#formErr").hidden = true;
@@ -663,6 +667,37 @@ function setKind(k) {
   $("#segPts").setAttribute("aria-pressed", k === "points"); $("#segOther").setAttribute("aria-pressed", k === "other");
   $("#ptsWrap").hidden = k !== "points"; $("#otherWrap").hidden = k !== "other";
 }
+/* Pick from contacts: the iPhone app uses the native picker; Android Chrome has a built-in one. */
+const ContactsPlugin = IN_APP && window.Capacitor?.registerPlugin ? window.Capacitor.registerPlugin("Contacts") : null;
+const canPickContacts = !!ContactsPlugin || ("contacts" in navigator && "select" in (navigator.contacts || {}));
+function bestNumber(list) {
+  const nums = (list || []).filter((p) => p && (p.number || p.value));
+  const mobile = nums.find((p) => /mobile|iphone|cell/i.test(p.label || p.type || ""));
+  return (mobile || nums[0])?.number || (mobile || nums[0])?.value || "";
+}
+async function pickContact() {
+  let name = "", phone = "";
+  try {
+    if (ContactsPlugin) {
+      const res = await ContactsPlugin.pickContact({ projection: { name: true, phones: true } });
+      const c = res?.contact || {};
+      name = c.name?.given || c.name?.display || "";
+      phone = bestNumber(c.phones);
+    } else {
+      const [c] = await navigator.contacts.select(["name", "tel"], { multiple: false });
+      if (!c) return;
+      name = (c.name?.[0] || "").split(" ")[0];
+      phone = c.tel?.[0] || "";
+    }
+  } catch (e) {
+    if (/denied|permission/i.test(String(e?.message || e))) toast("Handshake needs contacts access for this. Turn it on in Settings, under Handshake.");
+    return;
+  }
+  if (!name && !phone) return;
+  S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#withPhoneWrap").hidden = false;
+  $("#fWith").value = name; $("#fWithPhone").value = phone;
+  if (!phone) toast("That contact has no phone number. Type theirs in.");
+}
 function pickPerson(uid, name) {
   $("#fWith").value = name; S.pickedUid = uid; S.pickedName = name; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = true;
   const pn = $("#pickNote"); pn.textContent = "Only " + name + " can shake on this one."; pn.hidden = false;
@@ -723,6 +758,7 @@ function groupInviteBox() {
     <span class="sub">Paste it into your group text. Each person signs up with their own number, and their prediction will be waiting.</span></div>`;
 }
 function openSheet(withName, uid) {
+  $("#pickContactBtn").hidden = !canPickContacts;
   $("#betForm").reset(); $("#formErr").hidden = true; setKind("points"); S.opps = []; renderOpps();
   S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = false;
   $("#fDue").value = addDays(7); $("#fPts").value = 10;
