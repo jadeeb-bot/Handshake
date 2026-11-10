@@ -17,6 +17,8 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
 };
 const IN_APP = !!window.Capacitor?.isNativePlatform?.();
+/* Capacitor's plugin hookup: the app bundles capacitor.js; the website never needs it */
+const capPlugin = (name) => { const reg = window.Capacitor?.registerPlugin || window.capacitorExports?.registerPlugin; return IN_APP && reg ? reg(name) : null; };
 const PAGE_URL = IN_APP || !/^https?:$/.test(location.protocol)
   ? (window.HANDSHAKE_CONFIG?.siteUrl || "https://handshake-rho-ten.vercel.app/")
   : location.origin + location.pathname.replace(/index\.html$/, "");
@@ -743,7 +745,7 @@ function setKind(k) {
   $("#ptsWrap").hidden = k !== "points"; $("#otherWrap").hidden = k !== "other";
 }
 /* Pick from contacts: the iPhone app uses the native picker; Android Chrome has a built-in one. */
-const ContactsPlugin = IN_APP && window.Capacitor?.registerPlugin ? window.Capacitor.registerPlugin("Contacts") : null;
+const ContactsPlugin = capPlugin("Contacts");
 const canPickContacts = !!ContactsPlugin || ("contacts" in navigator && "select" in (navigator.contacts || {}));
 function bestNumber(list) {
   const nums = (list || []).filter((p) => p && (p.number || p.value));
@@ -1015,7 +1017,7 @@ function keyBytes(b64) {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }
 /* ---------- notifications in the iPhone app (Apple push) ---------- */
-const AppPush = IN_APP && window.Capacitor?.registerPlugin ? window.Capacitor.registerPlugin("PushNotifications") : null;
+const AppPush = capPlugin("PushNotifications");
 let appPushReady = false;
 async function saveAppToken(token) {
   if (!token || !S.me) return;
