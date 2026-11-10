@@ -15,7 +15,7 @@ Anyone can play from a link. Players sign up with their mobile number and a pass
 | `schema.sql` | The database: tables, access rules, and every action (sign, counter, report, confirm, crash) |
 | `update-*.sql` | Updates for a database that's already set up. Run each new one once in the SQL Editor. |
 
-Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`, then `update-notifications.sql`, then `update-shake-deadline.sql`, then `update-dispute-window.sql`, then `update-app-notifications.sql`.
+Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`, then `update-notifications.sql`, then `update-shake-deadline.sql`, then `update-dispute-window.sql`, then `update-app-notifications.sql`, then `update-settle-up.sql`.
 
 All the rules live in the database, so nobody can edit a prediction except through the normal buttons.
 
@@ -70,3 +70,4 @@ Sending happens in a Supabase Edge Function, `supabase/functions/notify/index.ts
 - **Everyone who signs in shares one board.** Anyone with the link can sign up and play. If you want an invite code later, that's a small addition.
 - **Texts and email.** Each prediction has a "Let them know" button that opens Messages, the phone's share sheet, or email with the message already written. Automatic texts (sent without tapping anything) would need a texting service such as Twilio.
 - **Scoring.** When a result is confirmed, the winner gains the points and the other side loses the same amount. "Other" stakes count toward win–loss records but not points. Crashes score themselves when the original prediction is confirmed.
+- **Settling up.** On the Rivals tab, each rival shows a current balance and an all-time record. The player who's up can press Settle up to clear the balance. The player who's down can press I settled up; the other side then has 24 hours to confirm or dispute, and with no answer it counts. Settling never changes the all-time points or record.

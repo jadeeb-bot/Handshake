@@ -110,6 +110,72 @@ async function sendWeb(admin: Admin, userIds: string[], note: Note) {
 const deliver = async (admin: Admin, userIds: string[], note: Note) =>
   (await sendWeb(admin, userIds, note)) + (await sendApple(admin, userIds, note));
 
+/* ---------- settling up ---------- */
+const ptsText = (n: number) => `${n} pt${n === 1 ? "" : "s"}`;
+const recent = (t?: string | null) => !!t && Date.now() - Date.parse(t) < 5 * 60_000;
+const isId = (v: unknown) => /^[0-9a-f-]{36}$/i.test(String(v ?? ""));
+
+async function settleNote(admin: Admin, caller: string, body: { settlement_request_id?: string; settlement_id?: string; auto?: boolean }) {
+  const nameOf = async (id: string) =>
+    ((await admin.from("profiles").select("name").eq("id", id).maybeSingle()).data?.name as string) || "Your rival";
+  const tag = "settle-" + (body.settlement_request_id ?? body.settlement_id);
+
+  // The player who's up cleared the balance directly: tell the other side.
+  if (body.settlement_id) {
+    if (!isId(body.settlement_id)) return reply(400, { error: "settlement_id is wrong." });
+    const { data: s } = await admin.from("settlements").select("*").eq("id", body.settlement_id).maybeSingle();
+    if (!s || s.user_uid !== caller) return reply(403, { error: "That isn't your settle-up." });
+    if (!s.other_uid || !recent(s.created_at)) return reply(200, { sent: 0 });
+    const sent = await deliver(admin, [s.other_uid], {
+      title: "Settled up",
+      body: `${await nameOf(caller)} settled up: ${ptsText(s.points)} cleared. Your balance is back to zero. The all-time record stays.`,
+      tag,
+    });
+    return reply(200, { sent });
+  }
+
+  if (!isId(body.settlement_request_id)) return reply(400, { error: "settlement_request_id is wrong." });
+  const { data: q } = await admin.from("settlement_requests").select("*").eq("id", body.settlement_request_id).maybeSingle();
+  if (!q) return reply(404, { error: "That settle-up no longer exists." });
+  if (![q.requester_uid, q.creditor_uid].includes(caller)) return reply(403, { error: "That isn't your settle-up." });
+  const down = await nameOf(q.requester_uid), up = await nameOf(q.creditor_uid);
+
+  // Counted on its own after 24 hours: announce it once, to both sides.
+  if (body.auto) {
+    const { data: claimed } = await admin.from("settlement_requests").update({ auto_notified: true })
+      .eq("id", q.id).eq("auto_notified", false).eq("status", "confirmed").eq("resolved_by", "auto").select("id").maybeSingle();
+    if (!claimed) return reply(200, { sent: 0, reason: "already announced" });
+    const sent = await deliver(admin, [q.requester_uid, q.creditor_uid], {
+      title: "Settled up",
+      body: `${down} and ${up} are square. ${ptsText(q.points)} cleared after 24 hours with no dispute.`,
+      tag,
+    });
+    return reply(200, { sent });
+  }
+
+  // The player who's down says they settled: the player who's up has 24 hours.
+  if (caller === q.requester_uid && q.status === "pending" && recent(q.created_at)) {
+    const sent = await deliver(admin, [q.creditor_uid], {
+      title: "Settle up?",
+      body: `${down} says you're settled up on ${ptsText(q.points)}. You have 24 hours to confirm or dispute it. After that, it counts.`,
+      tag,
+    });
+    return reply(200, { sent });
+  }
+  // The player who's up answered.
+  if (caller === q.creditor_uid && q.resolved_by === "creditor" && recent(q.resolved_at)) {
+    const sent = await deliver(admin, [q.requester_uid], {
+      title: q.status === "disputed" ? "Settle-up disputed" : "Settled up",
+      body: q.status === "disputed"
+        ? `${up} disputed your settle-up. The ${ptsText(q.points)} still stands.`
+        : `${up} confirmed it. ${ptsText(q.points)} cleared, and your balance is back to zero.`,
+      tag,
+    });
+    return reply(200, { sent });
+  }
+  return reply(200, { sent: 0, reason: "nothing new" });
+}
+
 /* ---------- the request ---------- */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -122,8 +188,9 @@ Deno.serve(async (req) => {
   if (authErr || !who?.user) return reply(401, { error: "Sign in first." });
   const caller = who.user.id;
 
-  let body: { prediction_id?: string; auto?: boolean } = {};
+  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
+  if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
   const predictionId = String(body.prediction_id ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(predictionId)) return reply(400, { error: "prediction_id is required." });
 

@@ -33,7 +33,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
+  notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
@@ -138,13 +138,25 @@ function rivals() {
   for (const b of S.bets) {
     const s = side(b); if (!s) continue;
     const o = other(s), k = b[o]?.uid || "name:" + nameOf(b, o).toLowerCase();
-    if (!m.has(k)) m.set(k, { name: personName(b[o]?.uid) || nameOf(b, o), uid: b[o]?.uid || null, score: 0, w: 0, l: 0, t: 0, live: 0, last: 0 });
+    if (!m.has(k)) m.set(k, { key: k, name: personName(b[o]?.uid) || nameOf(b, o), uid: b[o]?.uid || null, score: 0, w: 0, l: 0, t: 0, live: 0, last: 0 });
     const r = m.get(k); r.last = Math.max(r.last, b.createdAt || 0);
     if (isLive(b)) r.live++;
     if (!scored(b)) continue;
     if (b.winner === "push") r.t++;
     else if (b.winner === s) { r.w++; r.score += stakeOf(b); }
     else { r.l++; r.score -= stakeOf(b); }
+  }
+  for (const r of m.values()) {
+    // what's been settled either way since the start; the current balance is what's left
+    const mineSet = S.settlements.filter((x) => x.user_uid === S.me && (r.uid ? x.other_uid === r.uid : !x.other_uid && (x.other_name || "").toLowerCase() === r.name.toLowerCase()));
+    const theirSet = r.uid ? S.settlements.filter((x) => x.user_uid === r.uid && x.other_uid === S.me) : [];
+    r.current = r.score - mineSet.reduce((a, x) => a + x.points, 0) + theirSet.reduce((a, x) => a + x.points, 0);
+    const lastSet = [...mineSet.map((x) => ({ ...x, byMe: true })), ...theirSet.map((x) => ({ ...x, byMe: false }))].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+    r.lastSettled = lastSet || null;
+    const reqs = r.uid ? S.settleReqs.filter((q) => (q.requester_uid === S.me && q.creditor_uid === r.uid) || (q.requester_uid === r.uid && q.creditor_uid === S.me)) : [];
+    r.pendingReq = reqs.find((q) => q.status === "pending") || null;
+    const lastDisp = reqs.filter((q) => q.status === "disputed").sort((a, b) => Date.parse(b.resolved_at) - Date.parse(a.resolved_at))[0];
+    r.disputedReq = lastDisp && (!lastSet || Date.parse(lastDisp.resolved_at) > Date.parse(lastSet.created_at)) ? lastDisp : null;
   }
   return [...m.values()].sort((a, b) => b.w + b.l + b.t + b.live - (a.w + a.l + a.t + a.live) || b.last - a.last);
 }
@@ -155,7 +167,9 @@ const initials = (n) => n.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toU
 function renderLedger() {
   const t = mine(), dec = t.w + t.l;
   const sc = $("#score"); sc.textContent = signed(t.score); sc.className = "big " + tone(t.score);
-  $("#scoreSub").textContent = dec || t.t ? "points across " + (dec + t.t) + " prediction" + (dec + t.t === 1 ? "" : "s") : "No finished predictions yet";
+  const unsettled = S.settlements.length ? rivals().reduce((a, r) => a + r.current, 0) : null;
+  $("#scoreSub").textContent = (dec || t.t ? "all-time, across " + (dec + t.t) + " prediction" + (dec + t.t === 1 ? "" : "s") : "No finished predictions yet")
+    + (unsettled !== null && unsettled !== t.score ? " · " + signed(unsettled) + " unsettled" : "");
   $("#record").textContent = t.w + "–" + t.l + (t.t ? "–" + t.t : "");
   $("#recordSub").textContent = dec ? Math.round((t.w / dec) * 100) + "% right" + (t.t ? ", " + t.t + (t.t === 1 ? " tie" : " ties") : "") : "No decided calls yet";
   $("#inPlay").textContent = t.live;
@@ -538,9 +552,41 @@ function renderFeed() {
 function rivalSentence(r) {
   const nm = esc(r.name);
   if (!r.w && !r.l && !r.t) return `No finished predictions with ${nm} yet. ${r.live} call${r.live === 1 ? "" : "s"} in play.`;
-  if (r.score > 0) return `You're up ${pts(r.score)} on ${nm}, ${r.w}–${r.l} in calls.`;
-  if (r.score < 0) return `${nm} is up ${pts(-r.score)} on you, ${r.l}–${r.w} in calls. Time for a rematch.`;
-  return `Dead even with ${nm} on points, ${r.w}–${r.l} in calls.`;
+  if (r.current > 0) return `${nm} owes you ${pts(r.current)}.`;
+  if (r.current < 0) return `You owe ${nm} ${pts(-r.current)}.`;
+  return r.lastSettled ? `All square with ${nm}.` : `Dead even with ${nm} on points.`;
+}
+function settlePanel(r) {
+  return `<div class="cpanel"><span class="lab">Settle up with ${esc(r.name)}</span>
+    <span class="sub">Clears the ${pts(r.current)} ${esc(r.name)} owes you, so your current balance goes back to zero. Your all-time points and record stay.</span>
+    <div class="acts"><button class="btn primary" data-act="confirmSettle" data-k="${esc(r.key)}">Settle ${pts(r.current)}</button><button class="btn ghost" data-act="unsettle">Cancel</button></div></div>`;
+}
+function requestPanel(r) {
+  return `<div class="cpanel"><span class="lab">Tell ${esc(r.name)} you settled up</span>
+    <span class="sub">${esc(r.name)} gets 24 hours to confirm or dispute that you've settled the ${pts(-r.current)} you owe. If ${esc(r.name)} doesn't answer, it counts and your balance goes back to zero. Your all-time points and record stay.</span>
+    <div class="acts"><button class="btn primary" data-act="sendSettleReq" data-k="${esc(r.key)}">I settled up</button><button class="btn ghost" data-act="unsettle">Cancel</button></div></div>`;
+}
+function settleState(r) {
+  const q = r.pendingReq, nm = esc(r.name);
+  if (q && q.creditor_uid === S.me) {
+    const by = Date.parse(q.respond_by);
+    return `<div class="cpanel"><span class="lab">${nm} says you're settled up</span>
+      <span class="sub">${nm} says the ${pts(q.points)} is settled. You have until <b>${esc(deadlineText(by))}</b> (${timeLeft(by)}) to confirm or dispute it. After that, it counts.</span>
+      <div class="acts"><button class="btn primary" data-act="answerSettle" data-id="${esc(q.id)}" data-v="yes">Confirm</button><button class="btn" data-act="answerSettle" data-id="${esc(q.id)}" data-v="no">Dispute</button></div></div>`;
+  }
+  if (q) return `<div class="sub">You told ${nm} you settled up on ${pts(q.points)}. If ${nm} doesn't dispute it, it counts on <b>${esc(deadlineText(Date.parse(q.respond_by)))}</b>.</div>`;
+  if (r.disputedReq) {
+    const d = r.disputedReq, when = new Date(d.resolved_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    return `<div class="sub">${d.requester_uid === S.me ? `${nm} disputed your settle-up on ${when}.` : `You disputed ${nm}'s settle-up on ${when}.`}</div>`;
+  }
+  return "";
+}
+function rivalActs(r) {
+  if (S.settling === r.key) return r.current > 0 ? settlePanel(r) : requestPanel(r);
+  const waitingOnMe = r.pendingReq && r.pendingReq.creditor_uid === S.me;
+  const btn = r.current > 0 && !waitingOnMe ? `<button class="btn primary" data-act="settle" data-k="${esc(r.key)}">Settle up</button>`
+    : r.current < 0 && r.uid && !r.pendingReq ? `<button class="btn primary" data-act="settle" data-k="${esc(r.key)}">I settled up</button>` : "";
+  return `${settleState(r)}<div class="acts">${btn}<button class="btn" data-act="rematch" data-v="${esc(r.name)}" data-uid="${esc(r.uid || "")}">New call against ${esc(r.name)}</button></div>`;
 }
 function renderRivals() {
   const table = standings(), rs = rivals();
@@ -548,12 +594,16 @@ function renderRivals() {
   const rows = table.map((r, i) => `<tr class="${r.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.score)}">${signed(r.score)}</td><td class="num">${r.w}–${r.l}${r.t ? "–" + r.t : ""}</td></tr>`).join("");
   const cards = rs.map((r) => {
     const tot = r.w + r.l + r.t || 1;
+    const settledLine = r.lastSettled ? `<div class="sub">Last settled ${new Date(r.lastSettled.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: ${pts(r.lastSettled.points)} ${r.lastSettled.byMe ? "cleared by you" : "cleared by " + esc(r.name)}</div>` : "";
     return `<div class="card"><div class="rname"><span class="av">${esc(initials(r.name))}</span><h3>You vs ${esc(r.name)}</h3></div>
-      <div class="score ${tone(r.score)}">${signed(r.score)}<small>pts</small></div>
+      <span class="lab">Current balance</span>
+      <div class="score ${tone(r.current)}">${signed(r.current)}<small>pts</small></div>
+      <div class="sub">All-time: <b class="mono ${tone(r.score)}">${signed(r.score)} pts</b> · ${r.w}–${r.l}${r.t ? "–" + r.t : ""}</div>
+      ${settledLine}
       <div class="bars" aria-hidden="true"><i class="w" style="width:${(r.w / tot) * 100}%"></i><i class="p" style="width:${(r.t / tot) * 100}%"></i><i class="l" style="width:${(r.l / tot) * 100}%"></i></div>
       <div class="line">${rivalSentence(r)}</div>
       ${r.live ? `<div class="sub">${r.live} call${r.live === 1 ? "" : "s"} still in play</div>` : ""}
-      <div><button class="btn" data-act="rematch" data-v="${esc(r.name)}" data-uid="${esc(r.uid || "")}">New call against ${esc(r.name)}</button></div></div>`;
+      ${rivalActs(r)}</div>`;
   }).join("");
   return `<div style="display:flex;flex-direction:column;gap:22px">
     ${table.length ? `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Standings</h2><span class="sub">Everyone playing, by total points</span></div>
@@ -655,6 +705,7 @@ const ACT = {
   pushOn: () => pushOn(),
   pushOff: () => pushOff(),
   goto: (el) => {
+    if (!el.dataset.id) { toggleBell(); S.tab = "rivals"; render(); return; }
     const b = byId(el.dataset.id); toggleBell();
     S.tab = b && mineList().includes(b) ? "board" : "feed"; S.filter = "all"; S.feedFilter = "all"; render();
     setTimeout(() => document.getElementById("bet-" + el.dataset.id)?.scrollIntoView({ behavior: "smooth", block: "center" }), 60);
@@ -678,6 +729,34 @@ const ACT = {
   unextend: () => { S.extending = null; render(); },
   saveExtend: (el) => saveExtend(byId(el.dataset.id)),
   shakeIn: (el) => { $("#fShakeBy").value = localInput(Date.now() + Number(el.dataset.h) * 3600e3); },
+  settle: (el) => { S.settling = el.dataset.k; render(); },
+  unsettle: () => { S.settling = null; render(); },
+  confirmSettle: async (el) => {
+    const r = rivals().find((x) => x.key === el.dataset.k); if (!r) return;
+    const { data, error } = await sb.rpc("settle_up", { p_other: r.uid, p_other_name: r.name });
+    if (error) { toast(friendly(error)); return; }
+    S.settling = null; await loadSettlements(); render();
+    toast(`Settled. ${pts(data)} cleared with ${r.name}. Your all-time record stays.`);
+    const mine = S.settlements.find((x) => x.user_uid === S.me && (r.uid ? x.other_uid === r.uid : false));
+    if (mine) notifyQuiet({ settlement_id: mine.id });
+  },
+  sendSettleReq: async (el) => {
+    const r = rivals().find((x) => x.key === el.dataset.k); if (!r || !r.uid) return;
+    const { data, error } = await sb.rpc("request_settlement", { p_creditor: r.uid });
+    if (error) { toast(friendly(error)); return; }
+    S.settling = null; await loadSettlements(); render();
+    toast(`Sent. ${r.name} has 24 hours to confirm or dispute it.`);
+    notifyQuiet({ settlement_request_id: data });
+  },
+  answerSettle: async (el) => {
+    const id = el.dataset.id, yes = el.dataset.v === "yes";
+    const q = S.settleReqs.find((x) => x.id === id), who = q ? personName(q.requester_uid) || "them" : "them";
+    const { error } = await sb.rpc("respond_settlement", { p_id: id, p_accept: yes });
+    if (error) { toast(friendly(error)); await loadSettlements(); render(); return; }
+    await loadSettlements(); render();
+    toast(yes ? `Settled with ${who}. Your all-time record stays.` : `Disputed. ${who} still owes the points.`);
+    notifyQuiet({ settlement_request_id: id });
+  },
   fix: (el) => { S.fixing = el.dataset.id; S.notify = null; render(); },
   unfix: () => { S.fixing = null; render(); },
   saveFix: (el) => saveFix(byId(el.dataset.id)),
@@ -912,6 +991,12 @@ async function loadBets() {
   const inv = await sb.rpc("my_invites");
   S.myInvites = new Set((inv.data || []).map((x) => (typeof x === "string" ? x : x.my_invites || Object.values(x)[0])));
 }
+async function loadSettlements() {
+  const { data, error } = await sb.from("settlements").select("*").order("created_at", { ascending: false }).limit(1000);
+  if (!error && data) S.settlements = data;
+  const r2 = await sb.from("settlement_requests").select("*").order("created_at", { ascending: false }).limit(500);
+  if (!r2.error && r2.data) S.settleReqs = r2.data;
+}
 async function loadPeople() {
   const { data } = await sb.from("profiles").select("id,name").order("name");
   if (data) S.people = data;
@@ -923,8 +1008,10 @@ function liveUpdates() {
       clearTimeout(reloadT);
       reloadT = setTimeout(async () => { try { await loadBets(); await loadPeople(); render(); } catch (e) {} }, 250);
     })
+    .on("postgres_changes", { event: "*", schema: "public", table: "settlements" }, () => { loadSettlements().then(render).catch(() => {}); })
+    .on("postgres_changes", { event: "*", schema: "public", table: "settlement_requests" }, () => { loadSettlements().then(render).catch(() => {}); })
     .subscribe();
-  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); render(); } catch (e) {} } });
+  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); await loadSettlements(); render(); } catch (e) {} } });
 }
 
 /* ---------- what's new: activity since your last look ---------- */
@@ -946,6 +1033,18 @@ function activity() {
       const text = e.by === "Handshake" ? (b.parentId ? "Your crash " + auto : auto[0].toUpperCase() + auto.slice(1)) : (e.by || "Someone") + " " + (e.what || "made a move");
       items.push({ t: Date.parse(e.t), text, title: b.title, id: b.id });
     }
+  }
+  const fromReq = (x) => S.settleReqs.some((q) => q.status === "confirmed" && q.requester_uid === S.me && q.creditor_uid === x.user_uid && Math.abs(Date.parse(q.resolved_at) - Date.parse(x.created_at)) < 10000);
+  for (const q of S.settleReqs) {
+    const other = q.requester_uid === S.me ? q.creditor_uid : q.requester_uid, who = personName(other) || "Someone";
+    if (q.creditor_uid === S.me) items.push({ t: Date.parse(q.created_at), text: `${who} says you're settled up on ${pts(q.points)}`, title: "Confirm or dispute it within 24 hours. After that, it counts.", id: "", rivals: true });
+    if (q.resolved_by === "auto") items.push({ t: Date.parse(q.resolved_at), text: `Settle-up with ${who} counted after 24 hours`, title: pts(q.points) + " cleared. Your all-time record stays.", id: "", rivals: true });
+    else if (q.requester_uid === S.me && q.resolved_at && q.status !== "pending") items.push({ t: Date.parse(q.resolved_at), text: `${who} ${q.status === "disputed" ? "disputed" : "confirmed"} your settle-up`, title: q.status === "disputed" ? "The " + pts(q.points) + " still stands" : "Your balance with " + who + " is back to zero", id: "", rivals: true });
+  }
+  for (const x of S.settlements) {
+    if (x.user_uid === S.me || fromReq(x)) continue;
+    const who = personName(x.user_uid) || "Someone";
+    items.push({ t: Date.parse(x.created_at), text: `${who} settled up: ${pts(x.points)} cleared`, title: "Your balance with " + who + " is back to zero", id: "", rivals: true });
   }
   return items.sort((x, y) => y.t - x.t).slice(0, 40);
 }
@@ -1059,7 +1158,15 @@ async function announceAutoResults() {
       sb.functions.invoke("notify", { body: { prediction_id: id, auto: true } }).catch(() => {});
     }
   } catch (e) {}
+  try {
+    const { data } = await sb.rpc("pending_settlement_announcements");
+    for (const row of data || []) {
+      const id = typeof row === "string" ? row : row.pending_settlement_announcements || Object.values(row)[0];
+      notifyQuiet({ settlement_request_id: id, auto: true });
+    }
+  } catch (e) {}
 }
+function notifyQuiet(body) { try { sb.functions.invoke("notify", { body }).catch(() => {}); } catch (e) {} }
 async function pushOn() {
   if (IN_APP) return appPushOn();
   try {
@@ -1195,7 +1302,7 @@ async function enterOnce() {
   if (!prof?.name) { $("#gName").value = ""; return showGate("name"); }
   S.myName = prof.name; $("#whoName").textContent = "Signed in as " + prof.name;
   showGate(null); render();
-  try { await Promise.all([loadBets(), loadPeople()]); render(); }
+  try { await Promise.all([loadBets(), loadPeople(), loadSettlements()]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }
   if (!started) { started = true; liveUpdates(); setupAppPush(); }
   if (S.pendingAppToken) saveAppToken(S.pendingAppToken);
