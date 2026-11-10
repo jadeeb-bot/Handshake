@@ -701,6 +701,7 @@ const ACT = {
   showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
   rename: () => { $("#gName").value = S.myName; showGate("name"); },
   signOut: async () => {
+    try { const t = store.get("hs-app-push"); if (t) { await sb.from("app_push_devices").delete().eq("token", t); store.set("hs-app-push", ""); } } catch (e) {}
     try { const r = await navigator.serviceWorker?.getRegistration(); const s = r && (await r.pushManager.getSubscription());
       if (s) { await sb.from("push_subscriptions").delete().eq("endpoint", s.endpoint); await s.unsubscribe(); } } catch (e) {}
     await sb.auth.signOut(); location.reload();
@@ -902,6 +903,7 @@ function exportCsv() {
 /* ---------- data loading ---------- */
 async function loadBets() {
   try { await sb.rpc("settle_overdue"); } catch (e) {}  // results nobody disputed in 24 hours count now
+  announceAutoResults();
   const { data, error } = await sb.from("predictions").select("*").order("created_at", { ascending: false }).limit(2000);
   if (error) throw error;
   S.bets = data.map(fromRow); S.loaded = true;
@@ -978,7 +980,15 @@ if (!IN_APP && "serviceWorker" in navigator && /^https?:$/.test(location.protoco
   navigator.serviceWorker.addEventListener?.("message", (e) => { if (e.data?.type === "refresh") loadBets().then(render).catch(() => {}); });
 }
 async function pushStatus() {
-  if (IN_APP) return "app";
+  if (IN_APP) {
+    if (!AppPush) return "app-unsupported";
+    try {
+      const perm = (await AppPush.checkPermissions()).receive;
+      if (perm === "granted") return store.get("hs-app-push") ? "on" : "app-off";
+      if (perm === "denied") return "app-denied";
+    } catch (e) { return "app-unsupported"; }
+    return "app-off";
+  }
   if (isIOS && !standalone()) return "ios-home";
   if (!pushSupported()) return "unsupported";
   if (Notification.permission === "denied") return "denied";
@@ -994,7 +1004,9 @@ async function renderPushBox() {
     "ios-home": `<span>On iPhone, notifications work once Handshake is on your Home Screen. In Safari, tap <b>Share</b>, then <b>Add to Home Screen</b>, open Handshake from there, and come back here.</span>`,
     denied: `<span>Notifications are blocked for this site. Allow them in your browser's site settings, then reload.</span>`,
     unsupported: `<span>This browser can't show notifications from websites.</span>`,
-    app: "",
+    "app-off": `<span>Get a notification when someone shakes on, counters, declines or settles your predictions.</span><button class="btn primary" data-act="pushOn">Turn on notifications</button>`,
+    "app-denied": `<span>Notifications are off for Handshake. Turn them on in your iPhone's Settings, under Handshake, then Notifications.</span>`,
+    "app-unsupported": ``,
   }[st];
   box.className = html ? "pushbox" : ""; box.innerHTML = html || "";
 }
@@ -1002,7 +1014,52 @@ function keyBytes(b64) {
   const s = (b64 + "=".repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, "+").replace(/_/g, "/");
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }
+/* ---------- notifications in the iPhone app (Apple push) ---------- */
+const AppPush = IN_APP && window.Capacitor?.registerPlugin ? window.Capacitor.registerPlugin("PushNotifications") : null;
+let appPushReady = false;
+async function saveAppToken(token) {
+  if (!token || !S.me) return;
+  const { error } = await sb.from("app_push_devices").upsert({ token, user_id: S.me, platform: "ios" });
+  if (!error) { store.set("hs-app-push", token); renderPushBox(); }
+}
+function setupAppPush() {
+  if (!AppPush || appPushReady) return;
+  appPushReady = true;
+  AppPush.addListener("registration", (t) => { S.pendingAppToken = t.value; saveAppToken(t.value); });
+  AppPush.addListener("registrationError", () => toast("Couldn't turn on notifications. Try again in a moment."));
+  AppPush.addListener("pushNotificationReceived", () => loadBets().then(render).catch(() => {}));
+  AppPush.addListener("pushNotificationActionPerformed", () => loadBets().then(render).catch(() => {}));
+  // already allowed on this phone: refresh the device token, which Apple can change
+  AppPush.checkPermissions().then((p) => { if (p.receive === "granted") AppPush.register(); }).catch(() => {});
+}
+async function appPushOn() {
+  try {
+    const p = await AppPush.requestPermissions();
+    if (p.receive !== "granted") { toast("Notifications weren't allowed. You can turn them on in Settings, under Handshake."); return renderPushBox(); }
+    await AppPush.register();
+    toast("Notifications are on for this phone.");
+  } catch (e) { toast("Couldn't turn on notifications: " + (e?.message || e)); }
+}
+async function appPushOff() {
+  const t = store.get("hs-app-push");
+  try { if (t) await sb.from("app_push_devices").delete().eq("token", t); await AppPush.unregister?.(); } catch (e) {}
+  store.set("hs-app-push", ""); toast("Notifications are off for this phone."); renderPushBox();
+}
+/* results that counted after 24 hours: hand any unannounced ones to the notify function (it sends each once) */
+let lastAutoCheck = 0;
+async function announceAutoResults() {
+  if (Date.now() - lastAutoCheck < 60000) return;
+  lastAutoCheck = Date.now();
+  try {
+    const { data } = await sb.rpc("pending_auto_announcements");
+    for (const row of data || []) {
+      const id = typeof row === "string" ? row : row.pending_auto_announcements || Object.values(row)[0];
+      sb.functions.invoke("notify", { body: { prediction_id: id, auto: true } }).catch(() => {});
+    }
+  } catch (e) {}
+}
 async function pushOn() {
+  if (IN_APP) return appPushOn();
   try {
     const perm = await Notification.requestPermission();
     if (perm !== "granted") { toast("Notifications weren't allowed. You can change that in your browser's site settings."); return renderPushBox(); }
@@ -1016,6 +1073,7 @@ async function pushOn() {
   renderPushBox();
 }
 async function pushOff() {
+  if (IN_APP) return appPushOff();
   try {
     const reg = swReg || (await navigator.serviceWorker.getRegistration());
     const sub = reg && (await reg.pushManager.getSubscription());
@@ -1137,7 +1195,8 @@ async function enterOnce() {
   showGate(null); render();
   try { await Promise.all([loadBets(), loadPeople()]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }
-  if (!started) { started = true; liveUpdates(); }
+  if (!started) { started = true; liveUpdates(); setupAppPush(); }
+  if (S.pendingAppToken) saveAppToken(S.pendingAppToken);
 }
 
 if (!sb) {

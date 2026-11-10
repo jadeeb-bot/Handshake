@@ -1,11 +1,16 @@
 // Handshake push notifications.
-// The site calls this right after a player acts on a prediction (shakes, counters, declines,
-// records or confirms a result...). It finds who's on the other side and pushes them a
-// notification on every device where they turned notifications on.
+// The site and app call this right after a player acts on a prediction (shakes, counters,
+// declines, records or confirms a result...). It finds who's on the other side and notifies
+// them on every device where they turned notifications on: browsers (web push) and the
+// iPhone app (Apple Push Notification service). It also announces results that counted on
+// their own after 24 hours with no dispute, once, to both sides.
 //
-// Secrets (Supabase > Edge Functions > Secrets): VAPID_PRIVATE_KEY (required),
-// VAPID_PUBLIC_KEY and SITE_URL (optional; defaults below). SUPABASE_URL and
-// SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically.
+// Secrets (Supabase > Edge Functions > Secrets):
+//   VAPID_PRIVATE_KEY                       web push (required for browser notifications)
+//   APNS_KEY_ID, APNS_TEAM_ID, APNS_PRIVATE_KEY  iPhone app notifications (the .p8 key's
+//                                           text, Key ID and your Apple Team ID)
+//   VAPID_PUBLIC_KEY, SITE_URL, APNS_TOPIC  optional; defaults below
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically.
 import { createClient } from "npm:@supabase/supabase-js@2.118.0";
 import webpush from "npm:web-push@3.6.7";
 
@@ -14,6 +19,11 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const VAPID_PUBLIC = Deno.env.get("VAPID_PUBLIC_KEY") ?? "BGWmKz-IjaFjdRMQhrlOz1qkp2I96WGJ_2Ev2N0u5l1iAmt1qQEcMCJjXvyEmlbATFJ2myFuXuoaUSO603HcDx0";
 const VAPID_PRIVATE = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
 const SITE_URL = Deno.env.get("SITE_URL") ?? "https://handshake-rho-ten.vercel.app/";
+const APNS_KEY_ID = Deno.env.get("APNS_KEY_ID") ?? "";
+const APNS_TEAM_ID = Deno.env.get("APNS_TEAM_ID") ?? "";
+const APNS_PRIVATE_KEY = Deno.env.get("APNS_PRIVATE_KEY") ?? "";
+const APNS_TOPIC = Deno.env.get("APNS_TOPIC") ?? "com.jadeeb.handshake";
+const APNS_HOST = "https://api.push.apple.com"; // TestFlight and App Store builds use production
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -24,11 +34,86 @@ const reply = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 
 type Entry = { t?: string; by?: string; uid?: string; what?: string };
+type Note = { title: string; body: string; tag: string };
+// deno-lint-ignore no-explicit-any
+type Admin = any;
 
+/* ---------- Apple push (APNs) ---------- */
+const b64url = (bytes: Uint8Array) =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const textB64url = (s: string) => b64url(new TextEncoder().encode(s));
+let apnsJwt: { token: string; at: number } | null = null;
+
+/** Apple wants a short signed token (ES256) that is reused for up to an hour. */
+async function apnsToken(keyId: string, teamId: string, pem: string, nowSec = Math.floor(Date.now() / 1000)) {
+  if (apnsJwt && nowSec - apnsJwt.at < 50 * 60) return apnsJwt.token;
+  const der = Uint8Array.from(atob(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("pkcs8", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const head = textB64url(JSON.stringify({ alg: "ES256", kid: keyId }));
+  const claims = textB64url(JSON.stringify({ iss: teamId, iat: nowSec }));
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(`${head}.${claims}`)));
+  const token = `${head}.${claims}.${b64url(sig)}`;
+  apnsJwt = { token, at: nowSec };
+  return token;
+}
+
+async function sendApple(admin: Admin, userIds: string[], note: Note) {
+  if (!APNS_KEY_ID || !APNS_TEAM_ID || !APNS_PRIVATE_KEY) return 0;
+  const { data: phones } = await admin.from("app_push_devices").select("token").in("user_id", userIds);
+  if (!phones?.length) return 0;
+  const jwt = await apnsToken(APNS_KEY_ID, APNS_TEAM_ID, APNS_PRIVATE_KEY);
+  let sent = 0;
+  await Promise.all(phones.map(async ({ token }: { token: string }) => {
+    try {
+      const res = await fetch(`${APNS_HOST}/3/device/${token}`, {
+        method: "POST",
+        headers: {
+          authorization: `bearer ${jwt}`,
+          "apns-topic": APNS_TOPIC,
+          "apns-push-type": "alert",
+          "apns-priority": "10",
+          "apns-collapse-id": note.tag.slice(0, 64),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ aps: { alert: { title: note.title, body: note.body }, sound: "default" }, prediction_id: note.tag }),
+      });
+      if (res.ok) { sent++; return; }
+      const why = await res.json().catch(() => ({}));
+      if (res.status === 410 || why?.reason === "BadDeviceToken" || why?.reason === "Unregistered") {
+        await admin.from("app_push_devices").delete().eq("token", token); // phone uninstalled or turned it off
+      } else console.error("APNs", res.status, why?.reason);
+    } catch (e) { console.error("APNs send failed", e); }
+  }));
+  return sent;
+}
+
+/* ---------- web push ---------- */
+async function sendWeb(admin: Admin, userIds: string[], note: Note) {
+  if (!VAPID_PRIVATE) return 0;
+  const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", userIds);
+  if (!subs?.length) return 0;
+  webpush.setVapidDetails(SITE_URL.replace(/\/$/, ""), VAPID_PUBLIC, VAPID_PRIVATE);
+  const payload = JSON.stringify({ title: note.title, body: note.body, url: SITE_URL, tag: note.tag });
+  let sent = 0;
+  await Promise.all(subs.map(async (s: { endpoint: string; p256dh: string; auth: string }) => {
+    try {
+      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, { TTL: 86400 });
+      sent++;
+    } catch (e) {
+      const code = (e as { statusCode?: number }).statusCode;
+      if (code === 404 || code === 410) await admin.from("push_subscriptions").delete().eq("endpoint", s.endpoint); // browser unsubscribed
+    }
+  }));
+  return sent;
+}
+
+const deliver = async (admin: Admin, userIds: string[], note: Note) =>
+  (await sendWeb(admin, userIds, note)) + (await sendApple(admin, userIds, note));
+
+/* ---------- the request ---------- */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return reply(405, { error: "Use POST." });
-  if (!VAPID_PRIVATE) return reply(500, { error: "VAPID_PRIVATE_KEY secret is missing." });
 
   // Who is asking? Use their own sign-in token.
   const token = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -37,9 +122,29 @@ Deno.serve(async (req) => {
   if (authErr || !who?.user) return reply(401, { error: "Sign in first." });
   const caller = who.user.id;
 
-  let predictionId = "";
-  try { predictionId = String((await req.json())?.prediction_id ?? ""); } catch (_) { /* empty body */ }
+  let body: { prediction_id?: string; auto?: boolean } = {};
+  try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
+  const predictionId = String(body.prediction_id ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(predictionId)) return reply(400, { error: "prediction_id is required." });
+
+  // A result that counted on its own after 24 hours: announce it once, to both sides.
+  if (body.auto) {
+    const { data: claimed } = await admin.from("predictions").update({ auto_notified: true })
+      .eq("id", predictionId).eq("auto_notified", false).in("status", ["settled", "void"]).select("*").maybeSingle();
+    if (!claimed) return reply(200, { sent: 0, reason: "already announced" });
+    const p = claimed;
+    const last: Entry = Array.isArray(p.log) ? p.log[p.log.length - 1] ?? {} : {};
+    if (last.by !== "Handshake" || !/after 24 hours/.test(last.what ?? "")) return reply(200, { sent: 0, reason: "not an automatic result" });
+    const pts = p.stake_kind === "points" ? `${p.points} pt${p.points === 1 ? "" : "s"}` : p.stake_text || "the stakes";
+    const outcome = p.status === "void" ? "Called off after 24 hours with no dispute."
+      : p.winner === "push" ? "Counted as a tie after 24 hours with no dispute."
+      : `Counted after 24 hours with no dispute. ${p.winner === "a" ? p.a_name : p.b_name} takes ${pts}.`;
+    const people = new Set<string>([p.a_uid, p.b_uid].filter(Boolean));
+    const { data: kids } = await admin.from("predictions").select("a_uid,b_uid").eq("parent_id", p.id);
+    for (const k of kids ?? []) { if (k.a_uid) people.add(k.a_uid); if (k.b_uid) people.add(k.b_uid); }
+    const sent = await deliver(admin, [...people], { title: p.title, body: outcome, tag: p.id });
+    return reply(200, { sent });
+  }
 
   const { data: p } = await admin.from("predictions").select("*").eq("id", predictionId).maybeSingle();
   if (!p) return reply(404, { error: "That prediction no longer exists." });
@@ -64,27 +169,11 @@ Deno.serve(async (req) => {
   recipients.delete(caller);
   if (!recipients.size) return reply(200, { sent: 0, reason: "no one on Handshake to tell yet" });
 
-  const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", [...recipients]);
-  if (!subs?.length) return reply(200, { sent: 0, reason: "they haven't turned on notifications" });
-
-  webpush.setVapidDetails(SITE_URL.replace(/\/$/, ""), VAPID_PUBLIC, VAPID_PRIVATE);
-  const payload = JSON.stringify({
+  const sent = await deliver(admin, [...recipients], {
     title: p.title,
     body: `${last.by ?? "Someone"} ${last.what ?? "made a move"}`
       + (/^recorded:/.test(last.what ?? "") ? ". You have 24 hours to dispute it. After that, it counts." : ""),
-    url: SITE_URL,
     tag: p.id,
   });
-
-  let sent = 0;
-  await Promise.all(subs.map(async (s) => {
-    try {
-      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, { TTL: 86400 });
-      sent++;
-    } catch (e) {
-      const code = (e as { statusCode?: number }).statusCode;
-      if (code === 404 || code === 410) await admin.from("push_subscriptions").delete().eq("endpoint", s.endpoint); // device unsubscribed
-    }
-  }));
   return reply(200, { sent });
 });

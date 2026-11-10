@@ -15,7 +15,7 @@ Anyone can play from a link. Players sign up with their mobile number and a pass
 | `schema.sql` | The database: tables, access rules, and every action (sign, counter, report, confirm, crash) |
 | `update-*.sql` | Updates for a database that's already set up. Run each new one once in the SQL Editor. |
 
-Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`, then `update-notifications.sql`, then `update-shake-deadline.sql`, then `update-dispute-window.sql`.
+Updates so far: `update-counter-stakes.sql`, then `update-invite-by-phone.sql`, then `update-fix-invite.sql`, then `update-notifications.sql`, then `update-shake-deadline.sql`, then `update-dispute-window.sql`, then `update-app-notifications.sql`.
 
 All the rules live in the database, so nobody can edit a prediction except through the normal buttons.
 
@@ -61,6 +61,7 @@ Sending happens in a Supabase Edge Function, `supabase/functions/notify/index.ts
 
 1. In Supabase, open **Edge Functions**, create a function named exactly `notify`, paste in that file, and deploy it.
 2. Under **Edge Functions → Secrets**, add `VAPID_PRIVATE_KEY` with the private key you were given. Keep it secret; anyone with it could send notifications as Handshake. The matching public key is already in `config.js`.
+3. For notifications in the iPhone app, also add `APNS_KEY_ID`, `APNS_TEAM_ID` and `APNS_PRIVATE_KEY` (the full text of the Apple push key's .p8 file, including the BEGIN and END lines). The key comes from Apple Developer → Certificates, IDs & Profiles → Keys, with Apple Push Notifications service enabled.
 
 ## Good to know
 
