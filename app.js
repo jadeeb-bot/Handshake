@@ -1123,6 +1123,9 @@ async function saveAppToken(token) {
   const { error } = await sb.from("app_push_devices").upsert({ token, user_id: S.me, platform: "ios" });
   if (!error) { store.set("hs-app-push", token); renderPushBox(); }
 }
+/* the app icon's number counts notifications since the app was last opened; opening it clears it */
+function clearBadge() { if (IN_APP && S.me && !document.hidden) sb.rpc("clear_badge").then(() => {}, () => {}); }
+document.addEventListener("visibilitychange", clearBadge);
 function setupAppPush() {
   if (!AppPush || appPushReady) return;
   appPushReady = true;
@@ -1305,6 +1308,7 @@ async function enterOnce() {
   try { await Promise.all([loadBets(), loadPeople(), loadSettlements()]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }
   if (!started) { started = true; liveUpdates(); setupAppPush(); }
+  clearBadge();
   if (S.pendingAppToken) saveAppToken(S.pendingAppToken);
 }
 

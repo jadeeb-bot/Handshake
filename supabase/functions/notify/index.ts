@@ -63,13 +63,19 @@ async function sendApple(admin: Admin, userIds: string[], note: Note) {
     console.log("notify: Apple push skipped, secrets missing:", [!APNS_KEY_ID && "APNS_KEY_ID", !APNS_TEAM_ID && "APNS_TEAM_ID", !APNS_PRIVATE_KEY && "APNS_PRIVATE_KEY"].filter(Boolean).join(", "));
     return 0;
   }
-  const { data: phones, error: phErr } = await admin.from("app_push_devices").select("token").in("user_id", userIds);
+  const { data: phones, error: phErr } = await admin.from("app_push_devices").select("token,user_id").in("user_id", userIds);
   if (phErr) console.error("notify: couldn't read app_push_devices", phErr.code, phErr.message);
   console.log("notify: iPhones for", userIds.join(","), "=", phones?.length ?? 0);
   if (!phones?.length) return 0;
+  // App icon badge: one more for each player with an iPhone (cleared when they open the app).
+  const badges = new Map<string, number>();
+  const { data: bumped, error: bErr } = await admin.rpc("bump_badges", { p_ids: [...new Set(phones.map((x: { user_id: string }) => x.user_id))] });
+  if (bErr) console.error("notify: badge count failed", bErr.code, bErr.message);
+  for (const b of bumped ?? []) badges.set(b.id, b.badge);
   const jwt = await apnsToken(APNS_KEY_ID, APNS_TEAM_ID, APNS_PRIVATE_KEY);
   let sent = 0;
-  await Promise.all(phones.map(async ({ token }: { token: string }) => {
+  await Promise.all(phones.map(async ({ token, user_id }: { token: string; user_id: string }) => {
+    const badge = badges.get(user_id);
     try {
       const res = await fetch(`${APNS_HOST}/3/device/${token}`, {
         method: "POST",
@@ -81,7 +87,7 @@ async function sendApple(admin: Admin, userIds: string[], note: Note) {
           "apns-collapse-id": note.tag.slice(0, 64),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ aps: { alert: { title: note.title, body: note.body }, sound: "default" }, prediction_id: note.tag }),
+        body: JSON.stringify({ aps: { alert: { title: note.title, body: note.body }, sound: "default", ...(badge ? { badge } : {}) }, prediction_id: note.tag }),
       });
       if (res.ok) { sent++; console.log("APNs ok", res.status, "apns-id", res.headers.get("apns-id"), "token", token.slice(0, 8)); return; }
       const why = await res.json().catch(() => ({}));

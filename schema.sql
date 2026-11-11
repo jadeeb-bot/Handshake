@@ -1079,3 +1079,26 @@ grant select, insert, update, delete on
   public.profiles, public.predictions, public.prediction_invites, public.push_subscriptions,
   public.app_push_devices, public.settlements, public.settlement_requests
 to service_role;
+
+-- ---------- app icon badge (update-badge.sql) ----------
+alter table public.profiles add column if not exists badge_count int not null default 0;
+
+-- Called by the notify function only: add one for each player, return the new counts.
+create or replace function public.bump_badges(p_ids uuid[])
+returns table (id uuid, badge int)
+language sql security definer set search_path = public as $$
+  update public.profiles p set badge_count = least(p.badge_count + 1, 99)
+  where p.id = any (p_ids)
+  returning p.id, p.badge_count;
+$$;
+revoke all on function public.bump_badges(uuid[]) from public, anon, authenticated;
+grant execute on function public.bump_badges(uuid[]) to service_role;
+
+-- Called by the app when it opens: back to zero.
+create or replace function public.clear_badge()
+returns void
+language sql security definer set search_path = public as $$
+  update public.profiles set badge_count = 0 where id = auth.uid() and badge_count <> 0;
+$$;
+revoke all on function public.clear_badge() from public, anon;
+grant execute on function public.clear_badge() to authenticated;
