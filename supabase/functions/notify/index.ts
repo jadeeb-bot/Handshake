@@ -3,7 +3,8 @@
 // declines, records or confirms a result...). It finds who's on the other side and notifies
 // them on every device where they turned notifications on: browsers (web push) and the
 // iPhone app (Apple Push Notification service). It also announces results that counted on
-// their own after 24 hours with no dispute, once, to both sides.
+// their own when a 24-hour clock ran out (no dispute, no proof, proof unanswered, no
+// referee pick), once, to both sides. Prove It! steps also reach the referee.
 //
 // Secrets (Supabase > Edge Functions > Secrets):
 //   VAPID_PRIVATE_KEY                       web push (required for browser notifications)
@@ -219,10 +220,16 @@ Deno.serve(async (req) => {
     const last: Entry = Array.isArray(p.log) ? p.log[p.log.length - 1] ?? {} : {};
     if (last.by !== "Handshake" || !/after 24 hours/.test(last.what ?? "")) return reply(200, { sent: 0, reason: "not an automatic result" });
     const pts = p.stake_kind === "points" ? `${p.points} pt${p.points === 1 ? "" : "s"}` : p.stake_text || "the stakes";
-    const outcome = p.status === "void" ? "Called off after 24 hours with no dispute."
+    const winnerName = p.winner === "a" ? p.a_name : p.b_name;
+    const takes = p.winner === "push" ? "It's a tie, no points move." : `${winnerName} takes ${pts}.`;
+    const what = last.what ?? "";
+    const outcome = p.status === "hopeless" ? `Hopeless. ${p.referee_name ?? "The referee"} didn't pick a winner in 24 hours, so no points move.`
+      : /^no proof/.test(what) ? `No proof came in 24 hours. ${takes}`
+      : /^proof stood/.test(what) ? `The proof stood for 24 hours with no answer. ${takes}`
+      : p.status === "void" ? "Called off after 24 hours with no dispute."
       : p.winner === "push" ? "Counted as a tie after 24 hours with no dispute."
-      : `Counted after 24 hours with no dispute. ${p.winner === "a" ? p.a_name : p.b_name} takes ${pts}.`;
-    const people = new Set<string>([p.a_uid, p.b_uid].filter(Boolean));
+      : `Counted after 24 hours with no dispute. ${winnerName} takes ${pts}.`;
+    const people = new Set<string>([p.a_uid, p.b_uid, p.referee_uid].filter(Boolean));
     const { data: kids } = await admin.from("predictions").select("a_uid,b_uid").eq("parent_id", p.id);
     for (const k of kids ?? []) { if (k.a_uid) people.add(k.a_uid); if (k.b_uid) people.add(k.b_uid); }
     const sent = await deliver(admin, [...people], { title: p.title, body: outcome, tag: p.id });
@@ -233,7 +240,7 @@ Deno.serve(async (req) => {
   if (pErr) { console.error("notify: couldn't read prediction", predictionId, pErr.code, pErr.message); return reply(500, { error: pErr.message, code: pErr.code }); }
   if (!p) { console.error("notify: no prediction with id", predictionId, "caller", caller); return reply(404, { error: "That prediction no longer exists." }); }
 
-  const involved = [p.a_uid, p.b_uid, p.b_invited, p.counter_uid].includes(caller);
+  const involved = [p.a_uid, p.b_uid, p.b_invited, p.counter_uid, p.referee_uid].includes(caller);
   if (!involved) return reply(403, { error: "You're not part of this prediction." });
 
   // The newest thing the caller did on this prediction is what we announce.
@@ -242,22 +249,42 @@ Deno.serve(async (req) => {
   if (!last) return reply(200, { sent: 0, reason: "nothing new from you on this one" });
   if (last.t && Date.now() - Date.parse(last.t) > 5 * 60_000) return reply(200, { sent: 0, reason: "that was a while ago" });
 
-  // Tell the other side. When an original is decided, its crash players hear about it too.
+  // Tell the other side (a referee's pick goes to both sides). When an original is decided,
+  // its crash players hear about it too.
+  const what = last.what ?? "", by = last.by ?? "Someone";
   const recipients = new Set<string>();
-  if (caller === p.a_uid) { if (p.b_uid ?? p.b_invited) recipients.add(p.b_uid ?? p.b_invited); }
+  if (p.referee_uid && caller === p.referee_uid) { recipients.add(p.a_uid); if (p.b_uid) recipients.add(p.b_uid); }
+  else if (caller === p.a_uid) { if (p.b_uid ?? p.b_invited) recipients.add(p.b_uid ?? p.b_invited); }
   else recipients.add(p.a_uid);
-  if (/^(confirmed|agreed to call it off|withdrew|declined)/.test(last.what ?? "")) {
+  if (/^(confirmed|agreed to call it off|withdrew|declined|accepted the proof|refereed)/.test(what) || p.status === "hopeless") {
     const { data: kids } = await admin.from("predictions").select("a_uid,b_uid").eq("parent_id", p.id);
     for (const k of kids ?? []) { if (k.a_uid) recipients.add(k.a_uid); if (k.b_uid) recipients.add(k.b_uid); }
   }
   recipients.delete(caller);
-  if (!recipients.size) return reply(200, { sent: 0, reason: "no one on Handshake to tell yet" });
 
-  const sent = await deliver(admin, [...recipients], {
-    title: p.title,
-    body: `${last.by ?? "Someone"} ${last.what ?? "made a move"}`
-      + (/^recorded:/.test(last.what ?? "") ? ". You have 24 hours to dispute it. After that, it counts." : ""),
-    tag: p.id,
-  });
-  return reply(200, { sent });
+  // The referee hears once, when they're picked.
+  let refSent = 0;
+  const objected = /^says the proof doesn't hold up/.test(what);
+  if (objected && p.status === "referee" && p.referee_uid && p.referee_uid !== caller) {
+    recipients.delete(p.referee_uid);
+    refSent = await deliver(admin, [p.referee_uid], {
+      title: "You're the referee",
+      body: `${p.a_name} vs ${p.b_name}: ${p.title}. Look at the proof and pick the winner within 24 hours, or it's Hopeless.`,
+      tag: p.id,
+    });
+  }
+  if (!recipients.size) return reply(200, { sent: refSent, reason: refSent ? undefined : "no one on Handshake to tell yet" });
+
+  let text = `${by} ${what || "made a move"}`;
+  if (/^recorded:/.test(what)) text += ". You have 24 hours to confirm it or say prove it. After that, it counts.";
+  else if (/^said prove it/.test(what)) text = `${by} says prove it. Post a photo or a video link within 24 hours, or ${by} wins.`;
+  else if (/^posted proof/.test(what)) text = `${by} posted proof. You have 24 hours to accept it or say why it doesn't hold up. After that, it counts.`;
+  else if (/^accepted the proof/.test(what)) text = `${by} accepted the proof. Done and done.`;
+  else if (objected) text = p.status === "referee"
+    ? `${by} says your proof doesn't hold up. ${p.referee_name ?? "A referee"} is refereeing and has 24 hours to pick the winner.`
+    : `${by} says your proof doesn't hold up, and there's no one to referee. It's Hopeless: no points move.`;
+  else if (/^refereed: /.test(what)) text = `${by} refereed it: ${what.replace(/^refereed: /, "")}. Done and done.`;
+
+  const sent = await deliver(admin, [...recipients], { title: p.title, body: text, tag: p.id });
+  return reply(200, { sent: sent + refSent });
 });

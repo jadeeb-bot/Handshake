@@ -33,11 +33,11 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  phones: new Map(), notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
+  phones: new Map(), refPhones: new Map(), proofUrls: new Map(), proving: null, proofDraft: {}, objecting: null, objDraft: "", notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
-const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
-const LIVE = ["proposed", "open", "reported", "disputed"];
+const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", prove: "Prove it!", proved: "Proof posted", referee: "With the referee", settled: "Done and done", void: "Called off", hopeless: "Hopeless" };
+const LIVE = ["proposed", "open", "reported", "disputed", "prove", "proved", "referee"];
 /* an invite nobody shook on before its shake-by time */
 const expired = (b) => b.status === "proposed" && !!b.shakeBy && Date.now() > b.shakeBy;
 const isLive = (b) => LIVE.includes(b.status) && !expired(b);
@@ -65,6 +65,9 @@ function fromRow(r) {
     b: { name: r.b_name, uid: r.b_uid, invited: r.b_invited, proxy: r.b_proxy, signed: !!(r.b_uid || r.b_proxy) },
     status: r.status, report: r.report_winner ? { winner: r.report_winner, by: r.report_by } : null, winner: r.winner,
     disputeBy: r.dispute_by ? Date.parse(r.dispute_by) : null,
+    stepBy: r.step_by ? Date.parse(r.step_by) : null,
+    proof: r.proof_path || r.proof_link ? { path: r.proof_path, link: r.proof_link, at: r.proof_at ? Date.parse(r.proof_at) : null } : null,
+    objection: r.objection || "", referee: r.referee_uid || r.referee_name ? { uid: r.referee_uid, name: r.referee_name || "the referee" } : null,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
     counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
     shakeBy: r.shake_by ? Date.parse(r.shake_by) : null,
@@ -81,12 +84,19 @@ const other = (s) => (s === "a" ? "b" : "a");
 const nameOf = (b, s) => (b[s]?.name || "Someone").trim();
 const shortNo = (id) => String(id).replace(/-/g, "").slice(-4).toUpperCase();
 const scored = (b) => b.status === "settled" && b.winner;
+/* Prove It!: the person who recorded the result, the one challenging it, and the referee */
+const isRef = (b) => !!S.me && b.referee?.uid === S.me && b.status === "referee";
+const poster = (b) => b.report?.by || null;
+const challenger = (b) => (b.report?.by ? other(b.report.by) : null);
 function needsMe(b) {
   if (b.status === "proposed" && b.counter?.by === "b" && b.a?.uid === S.me) return !expired(b);
+  if (b.status === "referee") return isRef(b);
   const s = side(b); if (!s) return false;
   if (b.status === "open") return !b.parentId && !!b.due && b.due <= today();
   if (b.status === "reported") return b.report && b.report.by !== s;
   if (b.status === "disputed") return true;
+  if (b.status === "prove") return s === poster(b);
+  if (b.status === "proved") return s === challenger(b);
   return false;
 }
 const invitedMe = (b) => (b.b?.invited ? b.b.invited === S.me : S.myInvites.has(b.id));
@@ -101,7 +111,7 @@ const crashable = (b) => ["proposed", "open"].includes(b.status) && !expired(b) 
 /* other one-on-ones from the same group call: same caller, call and deadline, made together */
 const siblings = (b) => (b.parentId || !side(b) ? [] : S.bets.filter((x) => x.id !== b.id && !x.parentId && x.a.uid === b.a.uid && x.title === b.title
   && x.due === b.due && Math.abs((x.createdAt || 0) - (b.createdAt || 0)) < 10 * 60e3 && side(x) && ["open", "disputed"].includes(x.status) && !x.report));
-const mineList = () => S.bets.filter((b) => side(b) || canSign(b) || negSide(b));
+const mineList = () => S.bets.filter((b) => side(b) || canSign(b) || negSide(b) || isRef(b));
 
 /* ---------- scoring ---------- */
 function mine() {
@@ -198,13 +208,13 @@ function dueText(b) {
 }
 function statusChip(b) {
   if (needsMe(b)) {
-    const t = b.status === "proposed" ? "Counter offer" : b.status === "open" ? "Record result" : b.status === "reported" ? "Confirm result" : "Sort it out";
+    const t = { proposed: "Counter offer", open: "Record result", reported: "Confirm result", prove: "Post proof", proved: "Check the proof", referee: "Pick a winner" }[b.status] || "Sort it out";
     return `<span class="st need">${t}</span>`;
   }
   if (expired(b)) return `<span class="st done">Expired</span>`;
   if (canSign(b)) return `<span class="st need">${b.counter ? "Counter offer" : b.parentId ? "Crash offer" : "Shake on it!"}</span>`;
   if (waitingOnMyCounter(b)) return `<span class="st">You countered</span>`;
-  return `<span class="st ${["settled", "void"].includes(b.status) ? "done" : ""}">${LABEL[b.status] || b.status}</span>`;
+  return `<span class="st ${["settled", "void", "hopeless"].includes(b.status) ? "done" : ""}">${LABEL[b.status] || b.status}</span>`;
 }
 function sigLine(b, k) {
   const ok = k === "a" || b.b?.signed;
@@ -225,12 +235,153 @@ function notifyKind(b) {
   if (b.status === "open") return "remind";
   if (b.status === "reported" && b.report?.by === s) return "confirm";
   if (b.status === "disputed") return "dispute";
+  if (b.status === "prove") return s === challenger(b) ? "prove" : null;
+  if (b.status === "proved") return s === poster(b) ? "proof" : null;
+  if (b.status === "referee") return s === challenger(b) && b.referee ? "referee" : null;
   if (b.status === "settled") return "final";
   return null;
 }
 function notifyBtn(b) {
   const k = notifyKind(b); if (!k || S.notify?.id === b.id) return "";
-  return `<button class="btn quiet" data-act="notify" data-id="${b.id}" data-k="${k}">Let ${esc(nameOf(b, other(negSide(b))))} know</button>`;
+  const who = k === "referee" ? b.referee.name : nameOf(b, other(negSide(b)));
+  return `<button class="btn quiet" data-act="notify" data-id="${b.id}" data-k="${k}">${k === "referee" ? "Text " + esc(who) + " the link" : "Let " + esc(who) + " know"}</button>`;
+}
+
+/* ---------- Prove It! ---------- */
+/* the recorded result, from the reader's point of view */
+function claimText(b, s) {
+  const w = b.report?.winner;
+  if (w === "push") return "it's a tie";
+  if (w === "void") return "it should be called off";
+  return w && w === s ? "you won" : esc(nameOf(b, w || "a")) + " won";
+}
+const PROOF_MAX = 5 * 1024 * 1024;
+/* the photo and video link, shown to the two sides and the referee */
+function proofView(b) {
+  if (!b.proof || !["proved", "referee", "settled", "hopeless"].includes(b.status)) return "";
+  if (!side(b) && b.referee?.uid !== S.me) return "";
+  let img = "";
+  if (b.proof.path) {
+    const url = S.proofUrls.get(b.proof.path);
+    if (url === undefined) loadProofUrl(b.proof.path);
+    img = url ? `<a href="${esc(url)}" target="_blank" rel="noopener"><img src="${esc(url)}" alt="Proof photo for ${esc(b.title)}" loading="lazy"></a>`
+      : url === null ? `<span class="sub">The photo couldn't be loaded.</span>` : `<span class="sub">Loading the photo…</span>`;
+  }
+  let link = "";
+  if (b.proof.link) {
+    let host = ""; try { host = new URL(b.proof.link).hostname.replace(/^www\./, ""); } catch (e) {}
+    link = `<a class="btn" href="${esc(b.proof.link)}" target="_blank" rel="noopener">Watch the video${host ? " · " + esc(host) : ""}</a>`;
+  }
+  const objection = b.objection && ["referee", "settled", "hopeless"].includes(b.status)
+    ? `<p class="objection"><b>${esc(nameOf(b, challenger(b)))} says it doesn't hold up</b>${esc(b.objection)}</p>` : "";
+  return `<div class="proof"><span class="lab">${esc(nameOf(b, poster(b)))}'s proof</span>${img}${link}${objection}</div>`;
+}
+async function loadProofUrl(path) {
+  S.proofUrls.set(path, "");
+  try {
+    const { data, error } = await sb.storage.from("proof").createSignedUrl(path, 6 * 3600);
+    S.proofUrls.set(path, error ? null : data.signedUrl);
+  } catch (e) { S.proofUrls.set(path, null); }
+  render();
+}
+function proofPanel(b) {
+  const d = S.proofDraft;
+  return `<div class="cpanel">
+    <span class="lab">Post your proof</span>
+    <div class="acts"><label class="btn" for="proofFile">${d.blob ? "Choose a different photo" : "Choose a photo"}</label>
+      <input id="proofFile" type="file" accept="image/*" hidden>${d.blob ? `<button class="btn quiet" data-act="dropPhoto">Remove photo</button>` : ""}</div>
+    ${d.busy ? `<span class="sub">Getting the photo ready…</span>` : ""}
+    ${d.preview ? `<img class="proof-preview" src="${esc(d.preview)}" alt="Your proof photo">` : ""}
+    <div class="field"><label for="proofLink">Video link <span class="hint">optional</span></label>
+      <input id="proofLink" type="url" inputmode="url" autocomplete="off" placeholder="https://share.icloud.com/…" value="${esc(d.link || "")}"></div>
+    <span class="sub">A photo (up to 5 MB), a video link, or both. For video, share it from Photos as an iCloud link, or paste a Google Photos, YouTube or Dropbox link. Anyone with a video link can open it.</span>
+    <p class="err" id="proofErr" hidden></p>
+    <div class="acts"><button class="btn primary" data-act="sendProof" data-id="${b.id}" ${d.busy || S.busy.has(b.id) ? "disabled" : ""}>Send proof</button><button class="btn ghost" data-act="unprove">Cancel</button></div>
+  </div>`;
+}
+function objectPanel(b) {
+  return `<div class="cpanel">
+    <span class="lab">Why doesn't it hold up?</span>
+    <div class="field"><label for="objText">Tell the referee</label><textarea id="objText" maxlength="280" placeholder="That photo is from last season.">${esc(S.objDraft)}</textarea></div>
+    <span class="sub">Handshake picks a referee: the other person in the most recent finished prediction with either of you. They get 24 hours to pick the winner, or it's Hopeless.</span>
+    <p class="err" id="objErr" hidden></p>
+    <div class="acts"><button class="btn danger" data-act="sendObject" data-id="${b.id}" ${S.busy.has(b.id) ? "disabled" : ""}>Send it to a referee</button><button class="btn ghost" data-act="unobject">Cancel</button></div>
+  </div>`;
+}
+/* Shrink a photo to JPEG, at most 2000 px on the long side, so almost every photo fits under 5 MB.
+   This also turns iPhone HEIC photos into something every phone and browser can show. */
+function loadImage(file) {
+  return new Promise((ok, fail) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); ok(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); fail(new Error("unreadable")); };
+    img.src = url;
+  });
+}
+async function shrinkPhoto(file) {
+  let img;
+  try { img = await loadImage(file); } catch (e) { return file.size <= PROOF_MAX && /^image\/(jpeg|png|webp|gif|heic|heif)$/.test(file.type) ? file : null; }
+  for (const [side_, q] of [[2000, 0.82], [1600, 0.75], [1200, 0.7]]) {
+    const k = Math.min(1, side_ / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", q));
+    if (blob && blob.size <= PROOF_MAX) return blob;
+  }
+  return null;
+}
+async function pickProofFile(input) {
+  const file = input.files?.[0]; if (!file) return;
+  if (S.proofDraft.preview) URL.revokeObjectURL(S.proofDraft.preview);
+  S.proofDraft = { ...S.proofDraft, blob: null, preview: null, busy: true }; render();
+  const blob = await shrinkPhoto(file);
+  S.proofDraft.busy = false;
+  if (!blob) { S.proofDraft.err = "That photo is too big or couldn't be read. Try a screenshot of it, or a different photo."; render(); showProofErr(); return; }
+  S.proofDraft.blob = blob; S.proofDraft.preview = URL.createObjectURL(blob); S.proofDraft.err = ""; render();
+}
+function showProofErr(m) {
+  const e = $("#proofErr"); const msg = m || S.proofDraft.err; if (e && msg) { e.textContent = msg; e.hidden = false; }
+}
+async function sendProof(b) {
+  const d = S.proofDraft, link = ($("#proofLink")?.value ?? d.link ?? "").trim();
+  if (!d.blob && !link) return showProofErr("Add a photo or a video link.");
+  if (link) {
+    let ok = false; try { const u = new URL(link); ok = /^https?:$/.test(u.protocol) && u.hostname.includes("."); } catch (e) {}
+    if (!ok) return showProofErr("That video link doesn't look right. Paste the full link, starting with https://");
+  }
+  if (S.busy.has(b.id)) return;
+  let path = null;
+  if (d.blob) {
+    S.busy.add(b.id); render();
+    const type = d.blob.type || "image/jpeg", ext = { "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/heic": "heic", "image/heif": "heif" }[type] || "jpg";
+    path = `${b.id}/${Date.now()}.${ext}`;
+    const { error } = await sb.storage.from("proof").upload(path, d.blob, { contentType: type, upsert: false });
+    S.busy.delete(b.id);
+    if (error) { render(); return showProofErr(/size|large|exceed/i.test(error.message || "") ? "That photo is over 5 MB. Try a different one." : "The photo didn't upload. Check your connection and try again."); }
+  }
+  const ok = await call("submit_proof", { p_id: b.id, p_path: path, p_link: link || null }, "Proof posted. " + nameOf(b, challenger(b)) + " has 24 hours to answer.", b.id);
+  if (ok) {
+    if (d.preview) URL.revokeObjectURL(d.preview);
+    S.proving = null; S.proofDraft = {}; S.notify = { id: b.id, kind: "proof" }; render();
+  }
+}
+async function sendObject(b) {
+  const why = ($("#objText")?.value ?? S.objDraft).trim();
+  if (!why) { const e = $("#objErr"); if (e) { e.textContent = "Say why the proof doesn't hold up."; e.hidden = false; } return; }
+  if (S.busy.has(b.id)) return;
+  S.busy.add(b.id); render();
+  try {
+    const { data, error } = await sb.rpc("answer_proof", { p_id: b.id, p_accept: false, p_reason: why });
+    if (error) throw error;
+    announce(b.id);
+    S.objecting = null; S.objDraft = "";
+    await loadBets(); await loadPhones();
+    const nb = byId(b.id);
+    if (data === "referee" && nb?.referee) { toast(nb.referee.name + " is refereeing. Text them the link so they see it."); S.notify = { id: b.id, kind: "referee" }; }
+    else toast("Hopeless. There's no one to referee this one, so no points move.");
+  } catch (e) { toast(friendly(e)); }
+  finally { S.busy.delete(b.id); render(); }
 }
 
 function slip(b) {
@@ -242,6 +393,7 @@ function slip(b) {
     else if (s) stamp = b.winner === s ? `<div class="stamp win">${isOther(b) ? "WON" : "+" + p}</div>` : `<div class="stamp">${isOther(b) ? "LOST" : "−" + p}</div>`;
     else stamp = `<div class="stamp grey">FINAL</div>`;
   } else if (b.status === "void") stamp = `<div class="stamp grey">CALLED OFF</div>`;
+  else if (b.status === "hopeless") stamp = `<div class="stamp grey">HOPELESS</div>`;
   let note = "", acts = "";
   const busy = S.busy.has(b.id) ? "disabled" : "";
   const pick = S.picking === b.id;
@@ -285,11 +437,12 @@ function slip(b) {
       const r = b.report, by = esc(nameOf(b, r.by));
       const what = (w) => (w === "push" ? "it's a tie" : w === "void" ? "to call it off" : w === s ? "you won" : esc(nameOf(b, w)) + " won");
       if (s && r.by !== s) {
-        const window_ = b.disputeBy ? ` You have until <b>${esc(deadlineText(b.disputeBy))}</b> (${timeLeft(b.disputeBy)}) to dispute it. After that, it counts.` : "";
+        const canProve = r.winner !== s;
+        const window_ = b.disputeBy ? ` You have until <b>${esc(deadlineText(b.disputeBy))}</b> (${timeLeft(b.disputeBy)}) to ${canProve ? "confirm it or make them prove it" : "confirm it"}. After that, it counts.` : "";
         note = `<b>${by}</b> says ${r.winner === "void" ? "call it off" : what(r.winner)}.${window_}`;
-        acts = `<button class="btn primary" data-act="confirm" data-id="${b.id}" ${busy}>Confirm</button><button class="btn danger" data-act="dispute" data-id="${b.id}" ${busy}>Dispute</button>`;
+        acts = `<button class="btn primary" data-act="confirm" data-id="${b.id}" ${busy}>Confirm</button>${canProve ? `<button class="btn danger" data-act="proveIt" data-id="${b.id}" ${busy}>Prove it!</button>` : ""}`;
       } else if (s) {
-        note = `You said ${what(r.winner)}. Waiting for ${them} to confirm.${b.disputeBy ? ` If ${them} doesn't dispute it, it counts on ${esc(deadlineText(b.disputeBy))}.` : ""}`;
+        note = `You said ${what(r.winner)}. Waiting for ${them} to confirm.${b.disputeBy ? ` If ${them} doesn't say prove it, it counts on ${esc(deadlineText(b.disputeBy))}.` : ""}`;
         acts = notifyBtn(b) + (!b[o]?.uid ? `<button class="btn" data-act="confirm" data-id="${b.id}" ${busy}>${them} agreed in person</button>` : "") + `<button class="btn quiet" data-act="pick" data-id="${b.id}">Change result</button>`;
       } else note = `${by} recorded a result. Waiting on the other side.`;
       if (pick) acts = "";
@@ -298,6 +451,46 @@ function slip(b) {
     case "disputed":
       note = `<b>Disputed.</b> ${esc(nameOf(b, b.report?.by || "a"))}'s call wasn't accepted. Talk it out, then record the result again.`;
       if (s && !pick) acts = `${notifyBtn(b)}<button class="btn primary" data-act="pick" data-id="${b.id}" ${busy}>Record result again</button><button class="btn quiet" data-act="callOff" data-id="${b.id}" ${busy}>Call it off</button>`;
+      break;
+    case "prove": {
+      const pz = esc(nameOf(b, poster(b))), cz = esc(nameOf(b, challenger(b)));
+      const until = b.stepBy ? `<b>${esc(deadlineText(b.stepBy))}</b> (${timeLeft(b.stepBy)})` : "the deadline";
+      if (s && s === poster(b)) {
+        note = `<b>${cz}</b> says prove it. You said ${claimText(b, s)}. Post a photo or a video link by ${until}, or <b>${cz}</b> wins.`;
+        if (S.proving !== b.id) acts = `<button class="btn primary" data-act="prove" data-id="${b.id}" ${busy}>Post proof</button>`;
+      } else if (s) {
+        note = `You said prove it. <b>${pz}</b> has until ${until} to post proof. If nothing comes in, you win.`;
+        acts = notifyBtn(b);
+      } else note = `${cz} said prove it. Waiting on ${pz}'s proof.`;
+      break;
+    }
+    case "proved": {
+      const pz = esc(nameOf(b, poster(b))), cz = esc(nameOf(b, challenger(b)));
+      const until = b.stepBy ? `<b>${esc(deadlineText(b.stepBy))}</b> (${timeLeft(b.stepBy)})` : "the deadline";
+      if (s && s === challenger(b)) {
+        note = `<b>${pz}</b> posted proof that ${claimText(b, s)}. You have until ${until} to accept it or say why it doesn't hold up. After that, it counts.`;
+        if (S.objecting !== b.id) acts = `<button class="btn primary" data-act="acceptProof" data-id="${b.id}" ${busy}>Accept the proof</button><button class="btn danger" data-act="object" data-id="${b.id}" ${busy}>It doesn't hold up</button>`;
+      } else if (s) {
+        note = `Proof posted. Waiting for <b>${cz}</b> to accept it. If ${cz} doesn't answer, it counts on ${until}.`;
+        acts = notifyBtn(b);
+      } else note = `${pz} posted proof. Waiting on ${cz}.`;
+      break;
+    }
+    case "referee": {
+      const pz = esc(nameOf(b, poster(b))), cz = esc(nameOf(b, challenger(b))), rz = esc(b.referee?.name || "The referee");
+      const until = b.stepBy ? `<b>${esc(deadlineText(b.stepBy))}</b> (${timeLeft(b.stepBy)})` : "the deadline";
+      if (isRef(b)) {
+        note = `<b>You're the referee.</b> ${pz} says ${claimText(b, null)}. ${cz} says the proof doesn't hold up. Pick the winner by ${until}, or it's Hopeless.`;
+        acts = `<button class="btn" data-act="refPick" data-w="a" data-id="${b.id}" ${busy}>${esc(nameOf(b, "a"))} won</button><button class="btn" data-act="refPick" data-w="b" data-id="${b.id}" ${busy}>${esc(nameOf(b, "b"))} won</button><button class="btn" data-act="refPick" data-w="push" data-id="${b.id}" ${busy}>Tie</button>`;
+      } else if (s) {
+        note = `<b>${rz}</b> is refereeing. ${rz} has until ${until} to pick the winner, or it's Hopeless.`;
+        acts = notifyBtn(b);
+      } else note = `${rz} is refereeing this one.`;
+      break;
+    }
+    case "hopeless":
+      note = b.referee ? `<b>Hopeless.</b> ${esc(b.referee.name)} didn't pick a winner in time. No points moved, and it doesn't count in anyone's record.`
+        : `<b>Hopeless.</b> There was no one to referee. No points moved, and it doesn't count in anyone's record.`;
       break;
     case "settled":
       if (s) acts = notifyBtn(b);
@@ -337,6 +530,9 @@ function slip(b) {
     ${S.countering === b.id ? counterPanel(b) : ""}
     ${S.fixing === b.id ? fixPanel(b) : ""}
     ${S.extending === b.id ? extendPanel(b) : ""}
+    ${proofView(b)}
+    ${S.proving === b.id && b.status === "prove" ? proofPanel(b) : ""}
+    ${S.objecting === b.id && b.status === "proved" ? objectPanel(b) : ""}
     ${S.notify?.id === b.id && negSide(b) ? notifyPanel(b) : ""}
   </article>`;
 }
@@ -445,6 +641,14 @@ function message(b, kind) {
       break;
     case "confirm": subject = `Handshake: confirm the result of ${t}`; body = `${them}, I recorded the result of ${t}: ${claim(b.report?.winner)}.${b.disputeBy ? ` You have until ${deadlineText(b.disputeBy)} to dispute it. After that, it counts.` : ""} Confirm or dispute it on Handshake:`; break;
     case "dispute": subject = `Handshake: ${t} is disputed`; body = `${them}, I disputed the result of ${t}. Let's sort it out, then one of us can record it again:`; break;
+    case "prove": subject = `Handshake: prove it on ${t}`; body = `${them}, prove it. Post a photo or a video link for ${t} on Handshake${b.stepBy ? " by " + deadlineText(b.stepBy) : ""}, or I win:`; break;
+    case "proof": subject = `Handshake: proof is up on ${t}`; body = `${them}, my proof for ${t} is up.${b.stepBy ? " You have until " + deadlineText(b.stepBy) + " to accept it or say why it doesn't hold up. After that, it counts." : ""} Take a look on Handshake:`; break;
+    case "referee": {
+      const ref = b.referee?.name || "Hey";
+      subject = `Handshake: you're the referee on ${t}`;
+      body = `${ref}, you've been picked to referee ${nameOf(b, "a")} vs ${nameOf(b, "b")} on ${t}. Look at the proof and pick the winner on Handshake${b.stepBy ? " by " + deadlineText(b.stepBy) : ""}. If no one's picked, it's Hopeless:`;
+      return { subject, body: body + " " + PAGE_URL, to: ref };
+    }
     case "final":
       subject = `Handshake: final on ${t}`;
       if (b.winner === "push") body = `Final on ${t}: it's a tie, nothing changes hands. Rematch?`;
@@ -462,7 +666,7 @@ function smsHref(num, body) {
 }
 function notifyPanel(b) {
   const m = message(b, S.notify.kind);
-  const num = S.phones.get(b.id) || store.get(phoneKey(m.to)) || "";
+  const num = (S.notify.kind === "referee" ? S.refPhones.get(b.id) : S.phones.get(b.id)) || store.get(phoneKey(m.to)) || "";
   const invite = S.notify.kind === "invite";
   return `<div class="npanel"><span class="lab">${invite ? "Invite " + esc(m.to) : "Let " + esc(m.to) + " know"}</span>
     <p class="msg" id="msgText">${esc(m.body)}</p>
@@ -480,7 +684,7 @@ function inFilter(b, f) {
   if (f === "needs") return needsMe(b) || canSign(b);
   if (f === "live") return isLive(b);
   if (f === "done") return b.status === "settled";
-  if (f === "void") return b.status === "void" || expired(b);
+  if (f === "void") return b.status === "void" || b.status === "hopeless" || expired(b);
   return true;
 }
 const rank = (b) => (needsMe(b) || canSign(b) ? 0 : isLive(b) ? 1 : 2);
@@ -696,7 +900,27 @@ const ACT = {
     const msg = w === "void" ? "Called off" : w === "push" ? "Done and done. It's a tie, no points moved." : isOther(b) ? "Done and done. " + nameOf(b, w) + " wins: " + stakeLabel(b) : "Done and done. " + nameOf(b, w) + " takes " + pts(stakeOf(b));
     call("confirm_result", { p_id: el.dataset.id }, msg, el.dataset.id);
   },
-  dispute: (el) => call("dispute_result", { p_id: el.dataset.id }, "Marked as disputed", el.dataset.id),
+  proveIt: async (el) => {
+    const b = byId(el.dataset.id);
+    const ok = await call("prove_it", { p_id: el.dataset.id }, (b ? nameOf(b, poster(b)) : "They") + " has 24 hours to post proof.", el.dataset.id);
+    if (ok) { S.notify = { id: el.dataset.id, kind: "prove" }; render(); }
+  },
+  prove: (el) => { S.proving = el.dataset.id; S.proofDraft = {}; S.notify = null; render(); },
+  unprove: () => { if (S.proofDraft.preview) URL.revokeObjectURL(S.proofDraft.preview); S.proving = null; S.proofDraft = {}; render(); },
+  dropPhoto: () => { if (S.proofDraft.preview) URL.revokeObjectURL(S.proofDraft.preview); S.proofDraft = { link: S.proofDraft.link }; render(); },
+  sendProof: (el) => sendProof(byId(el.dataset.id)),
+  acceptProof: (el) => {
+    const b = byId(el.dataset.id), w = b?.report?.winner;
+    const msg = w === "void" ? "Called off" : w === "push" ? "Done and done. It's a tie, no points moved." : "Done and done. " + nameOf(b, w) + (isOther(b) ? " wins: " + stakeLabel(b) : " takes " + pts(stakeOf(b)));
+    call("answer_proof", { p_id: el.dataset.id, p_accept: true, p_reason: null }, msg, el.dataset.id);
+  },
+  object: (el) => { S.objecting = el.dataset.id; S.objDraft = ""; S.notify = null; render(); setTimeout(() => $("#objText")?.focus(), 30); },
+  unobject: () => { S.objecting = null; S.objDraft = ""; render(); },
+  sendObject: (el) => sendObject(byId(el.dataset.id)),
+  refPick: (el) => {
+    const b = byId(el.dataset.id), w = el.dataset.w;
+    call("referee_pick", { p_id: el.dataset.id, p_winner: w }, w === "push" ? "Called it a tie. Thanks, ref." : nameOf(b, w) + " wins. Thanks, ref.", el.dataset.id);
+  },
   callOff: (el) => call("report_result", { p_id: el.dataset.id, p_winner: "void" }, "Asked to call it off", el.dataset.id),
   counter: (el) => { S.countering = el.dataset.id; S.counterDraft = {}; S.notify = null; render(); },
   uncounter: () => { S.countering = null; render(); },
@@ -792,6 +1016,8 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "crashPts") S.crashDraft.pts = e.target.value;
   if (e.target.id === "cPts") S.counterDraft.pts = e.target.value;
   if (e.target.id === "cText") S.counterDraft.text = e.target.value;
+  if (e.target.id === "proofLink") S.proofDraft.link = e.target.value;
+  if (e.target.id === "objText") S.objDraft = e.target.value;
   if (e.target.id === "nPhone") {
     const n = e.target.value.replace(/[^\d+]/g, "");
     store.set(phoneKey(e.target.dataset.name), n);
@@ -799,6 +1025,7 @@ document.addEventListener("input", (e) => {
     if (b && a) a.href = smsHref(n, message(b, S.notify.kind).body);
   }
 });
+document.addEventListener("change", (e) => { if (e.target.id === "proofFile") pickProofFile(e.target); });
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const f = ACT[el.dataset.act]; if (f) { e.preventDefault(); f(el); }
@@ -988,6 +1215,10 @@ async function loadPhones() {
     const { data, error } = await sb.rpc("rival_phones");
     if (!error && data) { S.phones = new Map(data.map((x) => [x.prediction_id, x.phone])); if (S.notify) render(); }
   } catch (e) {}
+  try {
+    const { data, error } = await sb.rpc("referee_phones");
+    if (!error && data) { S.refPhones = new Map(data.map((x) => [x.prediction_id, x.phone])); if (S.notify) render(); }
+  } catch (e) {}
 }
 async function loadBets() {
   loadPhones();
@@ -1029,7 +1260,7 @@ function lastSeen() {
   if (!v) { const start = Date.now() - 3 * DAY; store.set(seenKey(), String(start)); return start; }
   return v;
 }
-function involvesMe(b) { return !!(side(b) || negSide(b) || invitedMe(b) || b.a?.uid === S.me || b.counter?.uid === S.me); }
+function involvesMe(b) { return !!(side(b) || negSide(b) || invitedMe(b) || b.a?.uid === S.me || b.counter?.uid === S.me || (S.me && b.referee?.uid === S.me)); }
 function activity() {
   const items = [];
   for (const b of S.bets) {
@@ -1038,7 +1269,8 @@ function activity() {
       const mine = e.uid ? e.uid === S.me : (e.by || "") === S.myName;
       if (mine || !e.t) continue;
       const auto = e.what || "updated";
-      const text = e.by === "Handshake" ? (b.parentId ? "Your crash " + auto : auto[0].toUpperCase() + auto.slice(1)) : (e.by || "Someone") + " " + (e.what || "made a move");
+      let text = e.by === "Handshake" ? (b.parentId ? "Your crash " + auto : auto[0].toUpperCase() + auto.slice(1)) : (e.by || "Someone") + " " + (e.what || "made a move");
+      if (e.by === "Handshake" && /^picked .* to referee$/.test(auto) && b.referee?.uid === S.me) text = "You've been picked to referee";
       items.push({ t: Date.parse(e.t), text, title: b.title, id: b.id });
     }
   }
