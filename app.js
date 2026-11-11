@@ -33,7 +33,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
+  phones: new Map(), notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", settled: "Done and done", void: "Called off" };
@@ -462,7 +462,7 @@ function smsHref(num, body) {
 }
 function notifyPanel(b) {
   const m = message(b, S.notify.kind);
-  const num = store.get(phoneKey(m.to)) || "";
+  const num = S.phones.get(b.id) || store.get(phoneKey(m.to)) || "";
   const invite = S.notify.kind === "invite";
   return `<div class="npanel"><span class="lab">${invite ? "Invite " + esc(m.to) : "Let " + esc(m.to) + " know"}</span>
     <p class="msg" id="msgText">${esc(m.body)}</p>
@@ -982,7 +982,15 @@ function exportCsv() {
 }
 
 /* ---------- data loading ---------- */
+/* the other side's number on each of my predictions, so Open Messages fills in the recipient */
+async function loadPhones() {
+  try {
+    const { data, error } = await sb.rpc("rival_phones");
+    if (!error && data) { S.phones = new Map(data.map((x) => [x.prediction_id, x.phone])); if (S.notify) render(); }
+  } catch (e) {}
+}
 async function loadBets() {
+  loadPhones();
   try { await sb.rpc("settle_overdue"); } catch (e) {}  // results nobody disputed in 24 hours count now
   announceAutoResults();
   const { data, error } = await sb.from("predictions").select("*").order("created_at", { ascending: false }).limit(2000);
