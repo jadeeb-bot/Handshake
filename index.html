@@ -255,6 +255,7 @@ a.btn.primary{color:var(--slip)}
       <div class="field"><label for="gPass">Password <span class="hint" id="passHint">at least 6 characters</span></label><input id="gPass" type="password" autocomplete="new-password"></div>
       <p class="err" id="phoneErr" hidden></p>
       <button class="btn primary" type="submit" id="phoneBtn">Create my account</button>
+      <button class="btn quiet" type="button" data-act="forgotPass" id="forgotBtn" hidden>Forgot your password?</button>
     </form>
   </section>
 
@@ -265,6 +266,7 @@ a.btn.primary{color:var(--slip)}
     <div class="acts"><button class="btn quiet" type="button" data-act="restartAuth" id="restartBtn">Use a different email</button><button class="btn quiet" type="button" data-act="showCode" id="showCodeBtn">Got a 6-digit code instead?</button></div>
     <form id="codeForm" novalidate hidden style="display:flex;flex-direction:column;gap:12px">
       <div class="field"><label for="gCode">Code</label><input id="gCode" class="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="••••••"></div>
+      <div class="field" id="newPassField" hidden><label for="gNewPass">New password <span class="hint">at least 6 characters</span></label><input id="gNewPass" type="password" autocomplete="new-password"></div>
       <p class="err" id="codeErr" hidden></p>
       <button class="btn primary" type="submit" id="codeBtn">Sign in</button>
     </form>

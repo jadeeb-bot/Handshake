@@ -1000,10 +1000,14 @@ const ACT = {
     try { await navigator.share({ title: m.subject, text: m.body }); } catch (e) { if (e?.name !== "AbortError") copy(m.body, "Message copied instead"); }
   },
   pickPerson: (el) => pickPerson(el.dataset.id, el.dataset.name),
-  restartAuth: () => showGate(S.authMode),
+  restartAuth: () => {
+    if (S.resetting) { S.resetting = false; $("#newPassField").hidden = true; $("#codeBtn").textContent = "Sign in"; setAuthNew(false); return showGate("phone"); }
+    showGate(S.authMode);
+  },
   authNew: () => setAuthNew(true),
   authBack: () => setAuthNew(false),
   showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
+  forgotPass: () => sendResetCode(),
   rename: () => { $("#gName").value = S.myName; showGate("name"); },
   signOut: async () => {
     try { const t = store.get("hs-app-push"); if (t) { await sb.from("app_push_devices").delete().eq("token", t); store.set("hs-app-push", ""); } } catch (e) {}
@@ -1465,6 +1469,7 @@ function setAuthNew(v) {
   $("#phoneHelp").textContent = v ? "Use your mobile number and pick a password. You'll stay signed in on this device." : "Sign in with your mobile number and password.";
   $("#passHint").hidden = !v; $("#gPass").autocomplete = v ? "new-password" : "current-password";
   $("#phoneBtn").textContent = v ? "Create my account" : "Sign in"; $("#phoneErr").hidden = true;
+  $("#forgotBtn").hidden = v;
 }
 setAuthNew(authNew);
 $("#phoneForm").addEventListener("submit", async (e) => {
@@ -1480,7 +1485,7 @@ $("#phoneForm").addEventListener("submit", async (e) => {
   if (res.error) {
     const m = res.error.message || "";
     if (/already registered|already exists/i.test(m)) { setAuthNew(false); return fail("That number already has an account. Enter its password to sign in."); }
-    if (/invalid login credentials/i.test(m)) return fail("That number and password don't match. Check both, or ask the organizer to reset your password.");
+    if (/invalid login credentials/i.test(m)) return fail("That number and password don't match. Check both, or tap Forgot your password? below.");
     if (/not confirmed/i.test(m)) return fail("This account is waiting on a text confirmation. Ask the organizer to switch off phone confirmations in Supabase.");
     if (/weak|password/i.test(m)) return fail(m);
     if (/rate limit|too many/i.test(m)) return fail("Too many tries just now. Wait a few minutes and try again.");
@@ -1490,6 +1495,32 @@ $("#phoneForm").addEventListener("submit", async (e) => {
   store.set("hs-returning", "1"); S.authMode = "phone";
   await enter();
 });
+/* Forgot password: Supabase texts a 6-digit code (through Twilio Verify), the code signs you in,
+   and you pick a new password in the same step. Only works for numbers that already have an account. */
+async function sendResetCode() {
+  const err = $("#phoneErr"); err.hidden = true;
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  const phone = normPhone($("#gPhone").value);
+  if (!phone) return fail("Enter your mobile number above first, then tap Forgot your password? again.");
+  const btn = $("#forgotBtn"); btn.disabled = true; btn.textContent = "Texting you a code…";
+  const { error } = await sb.auth.signInWithOtp({ phone, options: { shouldCreateUser: false } });
+  btn.disabled = false; btn.textContent = "Forgot your password?";
+  if (error) {
+    const m = error.message || "";
+    if (/unsupported phone provider|provider|sms.*(disabled|not enabled)|phone.*(disabled|not enabled)/i.test(m)) return fail("Password reset by text isn't switched on yet. Ask the organizer to reset your password.");
+    if (/signups? not allowed|not found|no user/i.test(m)) return fail("There's no account with that number. Check it, or tap I'm new.");
+    if (/rate limit|too many|security purposes/i.test(m)) return fail("A code was just sent. Wait a minute, then try again.");
+    return fail("Couldn't text a code: " + m);
+  }
+  S.phone = phone; S.authMode = "phone"; S.resetting = true;
+  $("#codeTitle").textContent = "Reset your password";
+  $("#codeSentTo").textContent = "We texted a 6-digit code to " + prettyPhone(phone) + ". It can take a minute to arrive.";
+  $("#codeLinkHelp").hidden = true; $("#showCodeBtn").hidden = true;
+  $("#restartBtn").textContent = "Back to sign in";
+  $("#gCode").value = ""; $("#gNewPass").value = ""; $("#newPassField").hidden = false;
+  $("#codeBtn").textContent = "Save new password and sign in";
+  $("#codeErr").hidden = true; $("#codeForm").hidden = false; showGate("code");
+}
 $("#unusedOtpForm")?.addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#phoneErr"); err.hidden = true;
@@ -1516,10 +1547,19 @@ $("#codeForm").addEventListener("submit", async (e) => {
   const token = $("#gCode").value.replace(/\D/g, "");
   const viaText = S.authMode === "phone";
   if (token.length !== 6) { err.textContent = "Enter all 6 digits from the " + (viaText ? "text." : "email."); err.hidden = false; return; }
+  const newPass = S.resetting ? $("#gNewPass").value : "";
+  if (S.resetting && newPass.length < 6) { err.textContent = "Pick a new password with at least 6 characters."; err.hidden = false; return; }
   const btn = $("#codeBtn"); btn.disabled = true;
   const { error } = await sb.auth.verifyOtp(viaText ? { phone: S.phone, token, type: "sms" } : { email: S.email, token, type: "email" });
+  if (error) { btn.disabled = false; err.textContent = "That code didn't work. Check the latest " + (viaText ? "text" : "email") + ", or go back and send a new code."; err.hidden = false; return; }
+  if (S.resetting) {
+    const { error: pe } = await sb.auth.updateUser({ password: newPass });
+    btn.disabled = false;
+    if (pe) { err.textContent = "You're signed in, but the new password didn't save: " + (pe.message || "try again") + ". Sign out and use Forgot your password? again."; err.hidden = false; setTimeout(() => enter(), 4000); return; }
+    S.resetting = false; $("#newPassField").hidden = true; store.set("hs-returning", "1");
+    toast("Password changed. You're signed in.");
+  }
   btn.disabled = false;
-  if (error) { err.textContent = "That code didn't work. Check the latest " + (viaText ? "text" : "email") + ", or send a new code."; err.hidden = false; return; }
   await enter();
 });
 $("#nameForm").addEventListener("submit", async (e) => {
