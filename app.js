@@ -1507,7 +1507,8 @@ async function sendResetCode() {
   btn.disabled = false; btn.textContent = "Forgot your password?";
   if (error) {
     const m = error.message || "";
-    if (/unsupported phone provider|provider|sms.*(disabled|not enabled)|phone.*(disabled|not enabled)/i.test(m)) return fail("Password reset by text isn't switched on yet. Ask the organizer to reset your password.");
+    if (/^unsupported phone provider|phone (provider|signups|logins)[^:]*(is )?disabled|sms provider (is )?not (configured|enabled)/i.test(m)) return fail("Password reset by text isn't switched on yet. Ask the organizer to reset your password.");
+    if (/sending .*otp|twilio|verify/i.test(m)) return fail("The text couldn't be sent: " + m.replace(/^error sending [^:]*:\s*/i, ""));
     if (/signups? not allowed|not found|no user/i.test(m)) return fail("There's no account with that number. Check it, or tap I'm new.");
     if (/rate limit|too many|security purposes/i.test(m)) return fail("A code was just sent. Wait a minute, then try again.");
     return fail("Couldn't text a code: " + m);
