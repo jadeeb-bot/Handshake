@@ -126,7 +126,14 @@ function mine() {
   }
   return { score, w, l, t, live, atStake };
 }
+/* Everyone sees the same standings: the server adds up every finished prediction (private ones
+   too) and returns only the totals. Before update-standings.sql runs, fall back to adding up
+   what this person can see. */
 function standings() {
+  if (S.serverStandings) {
+    return S.serverStandings.map((r) => ({ name: r.name || "Someone", score: +r.score || 0, w: r.w || 0, l: r.l || 0, t: r.t || 0, me: !!S.me && r.uid === S.me }))
+      .sort((a, b) => b.score - a.score || b.w - b.l - (a.w - a.l) || a.name.localeCompare(b.name));
+  }
   const m = new Map();
   const key = (b, s) => b[s]?.uid || "name:" + nameOf(b, s).toLowerCase();
   const get = (b, s) => {
@@ -823,7 +830,7 @@ function renderRivals() {
       ${rivalActs(r)}</div>`;
   }).join("");
   return `<div style="display:flex;flex-direction:column;gap:22px">
-    ${table.length ? `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Standings</h2><span class="sub">Everyone playing, by total points</span></div>
+    ${table.length ? `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Standings</h2><span class="sub">Everyone playing, by total points, private predictions included</span></div>
       <div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">W–L</th></tr></thead><tbody>${rows}</tbody></table></div></div>` : ""}
     ${rs.length ? `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Head to head</h2><span class="sub">Your points against each friend</span></div><div class="cards">${cards}</div></div>` : ""}
   </div>`;
@@ -1246,8 +1253,27 @@ async function loadBets() {
   const { data, error } = await sb.from("predictions").select("*").order("created_at", { ascending: false }).limit(2000);
   if (error) throw error;
   S.bets = data.map(fromRow); S.loaded = true;
+  loadTotals();
   const inv = await sb.rpc("my_invites");
   S.myInvites = new Set((inv.data || []).map((x) => (typeof x === "string" ? x : x.my_invites || Object.values(x)[0])));
+}
+/* standings for everyone, and the running total in the header */
+async function loadTotals() {
+  try {
+    const { data, error } = await sb.rpc("standings");
+    if (!error && Array.isArray(data)) { S.serverStandings = data; if (S.tab === "rivals") render(); }
+  } catch (e) {}
+  loadCount();
+}
+async function loadCount() {
+  try {
+    const { data, error } = await sb.rpc("prediction_count");
+    const n = Number(data);
+    if (error || !Number.isFinite(n) || n < 1) return;
+    const el = $("#predCount");
+    el.textContent = n.toLocaleString("en-US") + (n === 1 ? " Prediction" : " Predictions") + " and Counting!";
+    el.hidden = false;
+  } catch (e) {}
 }
 async function loadSettlements() {
   const { data, error } = await sb.from("settlements").select("*").order("created_at", { ascending: false }).limit(1000);
@@ -1613,6 +1639,7 @@ if (!sb) {
   $("#gatePhone").innerHTML = `<h2>Almost ready</h2><p>Handshake isn't connected to its database yet. Add your Supabase project URL and public key to <b>config.js</b>, then redeploy.</p>`;
 } else {
   enter();
+  loadCount();  // the running total shows on the sign-in screen too
   // Tapping the emailed link brings people back signed in; also catch it if this tab was left open.
   sb.auth.onAuthStateChange((event) => { if (event === "SIGNED_IN" && !started) enter(); });
 }

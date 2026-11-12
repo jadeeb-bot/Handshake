@@ -49,6 +49,8 @@ button{cursor:pointer}
 .mast{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .brand{font-family:var(--f-display);font-stretch:68%;font-weight:900;font-size:44px;line-height:.9;letter-spacing:-.01em;margin:0}
 .brand span{color:var(--pen)}
+.counting{display:inline-block;margin-left:12px;font-family:var(--f-body,inherit);font-stretch:normal;font-size:15px;font-weight:700;letter-spacing:0;line-height:1.2;color:var(--pen);vertical-align:.35em}
+@media (max-width:420px){.counting{display:block;margin:6px 0 0;vertical-align:baseline}}
 .tag{margin:6px 0 0;color:var(--muted);font-size:14px}
 .btn{border:1px solid var(--line);background:var(--slip);border-radius:8px;padding:8px 13px;font-weight:500;font-size:14px;line-height:1.2}
 .btn:hover{border-color:var(--pen)}
@@ -237,7 +239,7 @@ a.btn.primary{color:var(--slip)}
 <div class="wrap">
   <header class="mast">
     <div>
-      <h1 class="brand">handshake<span>.</span></h1>
+      <h1 class="brand">handshake<span>.</span><small class="counting" id="predCount" hidden></small></h1>
       <p class="tag">Call it. Shake on it. Take it to the bank.</p>
     </div>
     <div class="acts">
