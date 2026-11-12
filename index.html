@@ -160,6 +160,10 @@ tr.me td{background:var(--pen-soft)}
 .seg{display:flex;gap:2px;background:var(--chip);border-radius:8px;padding:3px;align-self:flex-start}
 .seg button{border:0;background:transparent;border-radius:6px;padding:5px 14px;font-size:13.5px;color:var(--muted)}
 .seg button[aria-pressed="true"]{background:var(--slip);color:var(--ink);font-weight:600}
+.seg.vis{flex-wrap:wrap;align-self:stretch}
+.seg.vis button{flex:1 1 auto;padding:6px 10px}
+.flabel{font-size:13px;font-weight:600}
+.tagv{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
 .stake.text{font-family:var(--f-body);font-size:16px;font-weight:600;overflow-wrap:anywhere}
 .check{display:flex;gap:9px;align-items:flex-start;font-size:14px}
 .check input{margin-top:4px;accent-color:var(--pen)}
@@ -330,6 +334,13 @@ a.btn.primary{color:var(--slip)}
           </div>
           <div class="field"><label for="fTerms">How do we decide? <span class="hint">optional, settles arguments later</span></label>
             <textarea id="fTerms" maxlength="240" placeholder="Final score per ESPN. Overtime counts."></textarea></div>
+          <div class="field"><span class="flabel" id="visLabel">Who can see it?</span>
+            <div class="seg vis" role="group" aria-labelledby="visLabel">
+              <button type="button" aria-pressed="true" data-act="setVis" data-v="all">Full Monty</button>
+              <button type="button" aria-pressed="false" data-act="setVis" data-v="circle">Circle of Trust</button>
+              <button type="button" aria-pressed="false" data-act="setVis" data-v="pair">Just the Two of Us</button>
+            </div>
+            <span class="hint" id="visHelp">Everyone on Handshake can see it and crash it.</span></div>
           <div class="field" id="shakeByWrap"><label for="fShakeBy">Shake by <span class="hint">after this, the invite expires</span></label>
             <input id="fShakeBy" type="datetime-local">
             <div class="quick" id="shakeQuick"></div></div>

@@ -59,7 +59,7 @@ function timeLeft(ms) {
 /* ---------- rows → slips ---------- */
 function fromRow(r) {
   return {
-    id: r.id, title: r.title, category: r.category, stakeKind: r.stake_kind, points: r.points, stakeText: r.stake_text,
+    id: r.id, title: r.title, category: r.category, visibility: r.visibility || "all", stakeKind: r.stake_kind, points: r.points, stakeText: r.stake_text,
     due: r.due || "", terms: r.terms || "",
     a: { name: r.a_name, uid: r.a_uid },
     b: { name: r.b_name, uid: r.b_uid, invited: r.b_invited, proxy: r.b_proxy, signed: !!(r.b_uid || r.b_proxy) },
@@ -384,6 +384,19 @@ async function sendObject(b) {
   finally { S.busy.delete(b.id); render(); }
 }
 
+/* ---------- who can see it ---------- */
+const VIS = {
+  all: ["Full Monty", "Everyone on Handshake can see it and crash it."],
+  circle: ["Circle of Trust", "Only the two of you and people either of you has played before can see it and crash it."],
+  pair: ["Just the Two of Us", "Only the two of you can see it. Nobody can crash it."],
+};
+const visTag = (b) => (b.visibility && b.visibility !== "all" ? `<span class="tagv" title="${esc(VIS[b.visibility][1])}">${esc(VIS[b.visibility][0])}</span>` : "");
+function setVis(v) {
+  S.vis = VIS[v] ? v : "all";
+  document.querySelectorAll('[data-act="setVis"]').forEach((x) => x.setAttribute("aria-pressed", x.dataset.v === S.vis));
+  $("#visHelp").textContent = VIS[S.vis][1];
+}
+
 function slip(b) {
   const s = side(b), o = s ? other(s) : null, p = stakeOf(b);
   const them = s ? esc(nameOf(b, o)) : null;
@@ -517,7 +530,7 @@ function slip(b) {
   const cls = "slip" + (needsMe(b) || canSign(b) ? " attn" : "") + (stamp ? " has-stamp" : "") + (S.fresh === b.id ? " newly" : "");
   return `<article class="${cls}" id="bet-${b.id}">
     ${stamp}
-    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}</div>
+    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}</div>
     <h3>${esc(b.title)}</h3>${crashLine(b)}
     ${b.terms ? `<p class="terms">${esc(b.terms)}</p>` : ""}
     <div class="row">${b.counter && b.status === "proposed"
@@ -719,7 +732,7 @@ function feedCard(b) {
   else if (["proposed", "open"].includes(b.status) && !b.parentId && side(b)) tail = `<span class="sub">You're in this one.</span>`;
   else if (["proposed", "open"].includes(b.status) && !b.parentId && liveKids(b).some((k) => k.a?.uid === S.me)) tail = `<span class="sub">You already crashed this one.</span>`;
   return `<article class="fcard ${b.parentId ? "crash" : ""}">
-    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}</div>
+    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}</div>
     <h3>${esc(b.title)}</h3>
     <div class="vs">${vs}</div>
     <div class="row">${isOther(b) ? `<span class="stake text">${esc(stakeLabel(b))}</span>` : `<span class="stake" style="font-size:16px">${p} <small>pts</small></span>`}${dueText(b)}</div>
@@ -745,12 +758,12 @@ function crashPanel(b) {
 }
 const FEED_FILTERS = [["crash", "Open to crash"], ["live", "In play"], ["all", "Everything"]];
 function renderFeed() {
-  if (!S.bets.length) return `<div class="empty"><h3>Nothing on the board yet</h3><p>Every prediction from everyone playing shows up here, newest first. Pending ones can be crashed.</p></div>`;
+  if (!S.bets.length) return `<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div>`;
   const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
   const list = S.bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const chips = FEED_FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.feedFilter === k}" data-act="feedFilter" data-v="${k}">${l} <span class="mono">${S.bets.filter((b) => pass(b, k)).length}</span></button>`).join("");
   const empty = S.feedFilter === "crash" ? `<div class="empty"><p>Nothing open to crash right now. Predictions you're already in, or have crashed, don't show here.</p></div>` : `<div class="empty"><p>Nothing here right now.</p></div>`;
-  return `<div style="display:flex;flex-direction:column;gap:14px"><div class="secthead"><h2>Everyone's predictions</h2><span class="sub">From everyone playing, newest first</span></div>
+  return `<div style="display:flex;flex-direction:column;gap:14px"><div class="secthead"><h2>Everyone's predictions</h2><span class="sub">Everything you're allowed to see, newest first</span></div>
     <div class="filters">${chips}</div><div class="feed">${list.length ? list.map(feedCard).join("") : empty}</div></div>`;
 }
 function rivalSentence(r) {
@@ -1008,6 +1021,7 @@ const ACT = {
   authBack: () => setAuthNew(false),
   showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
   forgotPass: () => sendResetCode(),
+  setVis: (el) => setVis(el.dataset.v),
   rename: () => { $("#gName").value = S.myName; showGate("name"); },
   signOut: async () => {
     try { const t = store.get("hs-app-push"); if (t) { await sb.from("app_push_devices").delete().eq("token", t); store.set("hs-app-push", ""); } } catch (e) {}
@@ -1147,7 +1161,7 @@ function groupInviteBox() {
 }
 function openSheet(withName, uid) {
   $("#pickContactBtn").hidden = !canPickContacts;
-  $("#betForm").reset(); $("#formErr").hidden = true; setKind("points"); S.opps = []; renderOpps();
+  $("#betForm").reset(); $("#formErr").hidden = true; setKind("points"); setVis("all"); S.opps = []; renderOpps();
   S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = false;
   $("#fDue").value = addDays(7); $("#fPts").value = 10; $("#fShakeBy").value = localInput(Date.now() + DAY); $("#shakeByWrap").hidden = false;
   if (withName) { if (uid) pickPerson(uid, withName); else $("#fWith").value = withName; }
@@ -1179,6 +1193,7 @@ $("#betForm").addEventListener("submit", async (e) => {
         p_category: $("#fCat").value, p_stake_kind: S.stakeKind, p_points: S.stakeKind === "points" ? p : 0,
         p_stake_text: S.stakeKind === "other" ? otherText : "", p_due: $("#fDue").value || null, p_terms: $("#fTerms").value.trim(), p_shook: shook,
         p_shake_by: shakeBy ? new Date(shakeBy).toISOString() : null,
+        ...(S.vis && S.vis !== "all" ? { p_visibility: S.vis } : {}),
       });
       if (error) throw Object.assign(error, { who: o.name });
       if (o.phone) store.set(phoneKey(o.name), o.phone);
@@ -1204,9 +1219,9 @@ $("#betForm").addEventListener("submit", async (e) => {
 /* ---------- export ---------- */
 function exportCsv() {
   if (!S.bets.length) return toast("No predictions to export yet");
-  const cols = ["Slip", "Prediction", "Category", "Called by", "Other side", "Stake", "Status", "Winner", "Decided by", "Terms", "Created"];
+  const cols = ["Slip", "Prediction", "Category", "Who can see it", "Called by", "Other side", "Stake", "Status", "Winner", "Decided by", "Terms", "Created"];
   const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const rows = S.bets.map((b) => [shortNo(b.id), b.title, b.category, nameOf(b, "a"), nameOf(b, "b"), stakeLabel(b), LABEL[b.status], b.winner === "push" ? "Tie" : b.winner ? nameOf(b, b.winner) : "", b.due, b.terms, b.createdAt ? new Date(b.createdAt).toISOString().slice(0, 10) : ""].map(q).join(","));
+  const rows = S.bets.map((b) => [shortNo(b.id), b.title, b.category, VIS[b.visibility || "all"][0], nameOf(b, "a"), nameOf(b, "b"), stakeLabel(b), LABEL[b.status], b.winner === "push" ? "Tie" : b.winner ? nameOf(b, b.winner) : "", b.due, b.terms, b.createdAt ? new Date(b.createdAt).toISOString().slice(0, 10) : ""].map(q).join(","));
   const blob = new Blob([[cols.map(q).join(","), ...rows].join("\n")], { type: "text/csv" });
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "handshake-predictions.csv";
   document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
