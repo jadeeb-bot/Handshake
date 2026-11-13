@@ -1105,8 +1105,8 @@ function renderPickem() {
     const needTb = tbGame && !pkLocked(tbGame, v.games) && !v.tbs.some((t) => t.uid === S.me);
     const noBonus = S.pk.v2 && !v.bonus.some((x) => x.uid === S.me);
     const todo = [missingGames.length ? `${missingGames.length} game${missingGames.length === 1 ? "" : "s"} to pick` : "", needTb ? "your tiebreaker (on the last game)" : ""].filter(Boolean);
-    if (!open) submit = mySub ? `<div class="pksubmit done">✓ Your picks were in. Everything's locked now.</div>` : "";
-    else if (mySub) submit = `<div class="pksubmit done"><b>✓ Your picks are in</b> (submitted ${esc(lockLabel(Date.parse(mySub.submitted_at)))}). You can still change them until they lock${wLock ? ", " + esc(lockLabel(wLock)) : ""}; changes save as you tap.${todo.length ? ` <b>Heads up:</b> still missing ${esc(todo.join(" and "))}.` : ""}</div>`;
+    if (!open) submit = mySub ? `<div class="pksubmit done"><div class="pkdone">Picks Submitted!</div><span>Everything's locked now. Good luck.</span></div>` : "";
+    else if (mySub) submit = `<div class="pksubmit done"><div class="pkdone">Picks Submitted!</div><span>Sent ${esc(lockLabel(Date.parse(mySub.submitted_at)))}. You can still change them until they lock${wLock ? ", " + esc(lockLabel(wLock)) : ""}; changes save as you tap.${todo.length ? ` <b>Heads up:</b> still missing ${esc(todo.join(" and "))}.` : ""}</span></div>`;
     else submit = `<div class="pksubmit"><button class="btn primary" data-act="pkSubmit">Submit my picks</button>
       <span class="sub">${todo.length ? "Still to do: " + esc(todo.join(" and ")) + "." : "Everything's picked. Submit to let the group know you're in."}${noBonus ? " No bonus game yet (optional, but it counts double)." : ""}</span></div>`;
   }
