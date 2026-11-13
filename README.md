@@ -87,7 +87,9 @@ Final scores come from the same `vegas-lines` function: it pulls scores only whi
 
 **Half right or it rolls over:** the winner needs at least half of the week's games right (games on the number don't count). Otherwise no points move and every entry's 5-point ante rolls over (`pickem_carry`). The next winner collects each rolled ante from everyone but themselves. Group standings add up `pickem_ledger`.
 
-Run `update-pickem.sql` after `update-vegas-lines.sql`, then `update-pickem-2.sql`. Redeploy `notify` for the crash-request notifications.
+**Sunday lock and Submit:** games before Sunday lock at their own kickoff; every other game, the tiebreaker and the bonus game lock at the week's first Sunday kickoff (`pickem_lock_at()`). Members press **Submit my picks** once every open game and the tiebreaker are in; they can still change picks until they lock. Group cards show a ✓ under **Picks in** (`pickem_submissions`).
+
+Run `update-pickem.sql` after `update-vegas-lines.sql`, then `update-pickem-2.sql`, then `update-pickem-3.sql`. Redeploy `notify` for the crash-request notifications.
 
 ## Good to know
 
