@@ -192,6 +192,39 @@ async function settleNote(admin: Admin, caller: string, body: { settlement_reque
   return reply(200, { sent: 0, reason: "nothing new" });
 }
 
+/* ---------- Pick 'em All! crash requests ---------- */
+async function crashNote(admin: Admin, caller: string, body: { pickem_group?: string; uid?: string }) {
+  if (!isId(body.pickem_group)) return reply(400, { error: "pickem_group is wrong." });
+  const uid = isId(body.uid) ? String(body.uid) : caller;
+  const { data: q } = await admin.from("pickem_crash_requests").select("*").eq("group_id", body.pickem_group).eq("uid", uid).maybeSingle();
+  const { data: g } = await admin.from("pickem_groups").select("name, created_by").eq("id", body.pickem_group).maybeSingle();
+  if (!q || !g) return reply(404, { error: "That request no longer exists." });
+  const nameOf = async (id: string) =>
+    ((await admin.from("profiles").select("name").eq("id", id).maybeSingle()).data?.name as string) || "Someone";
+  const tag = "crash-" + body.pickem_group + "-" + uid;
+  // Someone asked to crash: tell the group's creator.
+  if (caller === uid && q.status === "pending" && recent(q.created_at)) {
+    const sent = await deliver(admin, [g.created_by], {
+      title: "Can I crash?",
+      body: `${await nameOf(uid)} wants to crash your Pick 'em All! group ${g.name}. Open the Everyone tab to let them in or say no.`,
+      tag,
+    });
+    return reply(200, { sent });
+  }
+  // The creator answered: tell the person who asked.
+  if (caller === g.created_by && q.status !== "pending" && recent(q.answered_at)) {
+    const sent = await deliver(admin, [uid], {
+      title: q.status === "accepted" ? "You're in" : "Not this time",
+      body: q.status === "accepted"
+        ? `${await nameOf(caller)} let you crash ${g.name}. Make your picks for the week on the Everyone tab.`
+        : `${await nameOf(caller)} said no to crashing ${g.name}.`,
+      tag,
+    });
+    return reply(200, { sent });
+  }
+  return reply(200, { sent: 0, reason: "nothing new" });
+}
+
 /* ---------- the request ---------- */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -205,9 +238,10 @@ Deno.serve(async (req) => {
   const caller = who.user.id;
   console.log("notify: from", caller, "key type", SERVICE_KEY.startsWith("sb_secret_") ? "secret" : SERVICE_KEY.startsWith("eyJ") ? "legacy service_role" : "unknown");
 
-  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string } = {};
+  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
   if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
+  if (body.pickem_group) return await crashNote(admin, caller, body);
   const predictionId = String(body.prediction_id ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(predictionId)) return reply(400, { error: "prediction_id is required." });
 

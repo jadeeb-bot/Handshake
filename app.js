@@ -906,24 +906,28 @@ const pkIsMember = (id) => !!S.me && pkMembers(id).some((m) => m.uid === S.me);
 const pkName = (uid) => personName(uid) || "Someone";
 
 async function loadPickem() {
-  const [g, m, r, w, c] = await Promise.all([
+  const [g, m, r, w, c, led, car, req] = await Promise.all([
     sb.from("pickem_groups").select("id,name,created_by,created_at").order("created_at"),
     sb.from("pickem_members").select("*"),
     sb.from("pickem_results").select("*"),
     sb.from("pickem_weeks").select("*").order("week", { ascending: false }),
     sb.rpc("my_pickem_codes"),
+    sb.from("pickem_ledger").select("*"),
+    sb.from("pickem_carry").select("*").is("paid_week", null),
+    sb.from("pickem_crash_requests").select("*"),
   ]);
   if (g.error) { S.pk = { ...S.pk, off: true }; return; }
+  // before update-pickem-2.sql runs, the ledger is missing: fall back to weekly results
+  const ledger = led.error ? (r.data || []).filter((x) => x.points) : led.data || [];
   S.pk = { off: false, groups: g.data || [], members: m.data || [], results: r.data || [], weeks: w.data || [],
-    codes: new Map((c.data || []).map((x) => [x.group_id, x.code])) };
+    codes: new Map((c.data || []).map((x) => [x.group_id, x.code])), ledger, carry: car.error ? [] : car.data || [],
+    requests: req.error ? [] : req.data || [], v2: !led.error };
 }
 function pkTotals(gid) {
   const rows = new Map(pkMembers(gid).map((m) => [m.uid, { uid: m.uid, name: pkName(m.uid), points: 0, won: 0, weeks: 0 }]));
-  for (const r of S.pk.results.filter((x) => x.group_id === gid)) {
-    const row = rows.get(r.uid) || { uid: r.uid, name: pkName(r.uid), points: 0, won: 0, weeks: 0 };
-    row.points += r.points; row.weeks++; if (r.won && r.points > 0) row.won++;
-    rows.set(r.uid, row);
-  }
+  const row = (uid) => { if (!rows.has(uid)) rows.set(uid, { uid, name: pkName(uid), points: 0, won: 0, weeks: 0 }); return rows.get(uid); };
+  for (const r of S.pk.results.filter((x) => x.group_id === gid)) { row(r.uid).weeks++; if (r.won && r.points > 0) row(r.uid).won++; }
+  for (const l of S.pk.ledger.filter((x) => x.group_id === gid)) row(l.uid).points += l.points;
   return [...rows.values()].sort((a, b) => b.points - a.points || b.won - a.won || a.name.localeCompare(b.name));
 }
 function pkInviteText(g) {
@@ -936,12 +940,23 @@ function pkCard(g) {
   const lastWinners = last ? S.pk.results.filter((r) => r.group_id === g.id && r.week === last.week && r.won && r.points > 0) : [];
   const lastLine = !last ? "" : lastWinners.length
     ? `<div class="sub">${esc(weekLabel(last.week))}: ${esc(listNames(lastWinners.map((r) => pkName(r.uid))))} won, ${signed(lastWinners[0].points)} pts</div>`
+    : last.rolled ? `<div class="sub">${esc(weekLabel(last.week))}: nobody got half right (best was ${last.best} of ${last.games}). The pot rolled over.</div>`
     : `<div class="sub">${esc(weekLabel(last.week))}: no points moved (${last.entries} entr${last.entries === 1 ? "y" : "ies"})</div>`;
+  const rolled = S.pk.carry.filter((c) => c.group_id === g.id).length;
+  const potLine = rolled ? `<div class="pkpot">💰 <b>${rolled * 5} pts rolled over</b> and waiting for this week's winner.</div>` : "";
+  const reqs = g.created_by === S.me ? S.pk.requests.filter((q) => q.group_id === g.id && q.status === "pending") : [];
+  const reqRows = reqs.map((q) => `<div class="pkreq"><span><b>${esc(pkName(q.uid))}</b> wants to crash.</span><span class="acts"><button class="btn primary" data-act="pkLetIn" data-id="${g.id}" data-v="${q.uid}">Let them in</button><button class="btn ghost" data-act="pkSayNo" data-id="${g.id}" data-v="${q.uid}">No thanks</button></span></div>`).join("");
   const table = `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Weeks won</th></tr></thead><tbody>${rows.map((r, i) =>
     `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.uid === S.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td></tr>`).join("")}</tbody></table></div>`;
   let acts;
   if (mine) acts = `<div class="acts"><button class="btn primary" data-act="pkOpen" data-id="${g.id}">Make your picks</button><button class="btn ghost" data-act="pkInvite" data-id="${g.id}">Invite friends</button></div>`;
-  else acts = `<div class="acts"><button class="btn ghost" data-act="pkOpen" data-id="${g.id}">See picks</button><span class="sub">Invite only. Ask ${esc(pkName(g.created_by))} for the link.</span></div>`;
+  else {
+    const mineReq = S.pk.requests.find((q) => q.group_id === g.id && q.uid === S.me);
+    const ask = !S.pk.v2 ? `<span class="sub">Invite only. Ask ${esc(pkName(g.created_by))} for the link.</span>`
+      : mineReq?.status === "pending" ? `<span class="sub">You asked to crash. Waiting on ${esc(pkName(g.created_by))}.</span>`
+      : `<button class="btn primary" data-act="pkCrash" data-id="${g.id}">Can I crash?</button>${mineReq?.status === "declined" ? `<span class="sub">${esc(pkName(g.created_by))} said no last time.</span>` : ""}`;
+    acts = `<div class="acts">${ask}<button class="btn ghost" data-act="pkOpen" data-id="${g.id}">See picks</button></div>`;
+  }
   let invite = "";
   if (S.pkInviting === g.id && S.pk.codes.get(g.id)) {
     const text = pkInviteText(g);
@@ -950,7 +965,7 @@ function pkCard(g) {
   }
   return `<article class="card pkcard">
     <div class="slip-top"><span class="cat">Pick 'em All!</span><span class="sub">${rows.length} member${rows.length === 1 ? "" : "s"}</span></div>
-    <h3>${esc(g.name)}</h3>${lastLine}${table}${acts}${invite}</article>`;
+    <h3>${esc(g.name)}</h3>${lastLine}${potLine}${reqRows}${table}${acts}${invite}</article>`;
 }
 function pkSection() {
   if (!S.pk || S.pk.off) return "";
@@ -962,7 +977,7 @@ function pkSection() {
   const join = `<div class="pkjoin"><input id="pkCode" maxlength="6" placeholder="Invite code" autocomplete="off" autocapitalize="characters" aria-label="Invite code"><button class="btn" data-act="pkJoin">Join</button></div>`;
   return `<div style="display:flex;flex-direction:column;gap:10px">
     <div class="secthead"><h2>Pick 'em All!</h2>${S.pkNaming ? "" : `<button class="btn quiet" data-act="pkName">Start a group</button>`}</div>
-    <span class="sub">Weekly NFL pools. Pick every game against the Vegas opening spread, plus the Monday night total as the tiebreaker. The week's winner gets 5 pts for every other entry; everyone else gives up 5.</span>
+    <span class="sub">Weekly NFL pools. Pick every game against the Vegas opening spread, plus the Monday night total as the tiebreaker. ${S.pk.v2 ? " Star one game as your bonus: it counts double." : ""} The week's winner gets 5 pts for every other entry; everyone else gives up 5.${S.pk.v2 ? " Win with at least half the games right, or the whole pot rolls over to next week." : ""}</span>
     ${create}${groups.length ? `<div class="cards">${groups.map(pkCard).join("")}</div>` : ""}${join}</div>`;
 }
 
@@ -974,15 +989,16 @@ async function loadPkWeek() {
   if (error) { v.err = friendly(error); v.games = []; render(); return; }
   v.games = (games || []).filter((g) => nflWeek(g.starts_at) === v.week);
   const ids = v.games.map((g) => g.id);
-  const [p, t] = await Promise.all([
+  const [p, t, b] = await Promise.all([
     ids.length ? sb.from("pickem_picks").select("*").eq("group_id", v.gid).in("game_id", ids) : { data: [] },
     sb.from("pickem_tiebreaks").select("*").eq("group_id", v.gid).eq("week", v.week),
+    S.pk?.v2 ? sb.from("pickem_bonus").select("*").eq("group_id", v.gid).eq("week", v.week) : { data: [] },
   ]);
-  v.picks = p.data || []; v.tbs = t.data || []; v.err = "";
+  v.picks = p.data || []; v.tbs = t.data || []; v.bonus = b.data || []; v.err = "";
   render();
 }
 function pkOpen(gid, week) {
-  S.pkView = { gid, week: week || nflWeek(Date.now()), games: null, picks: [], tbs: [] }; S.pkInviting = null;
+  S.pkView = { gid, week: week || nflWeek(Date.now()), games: null, picks: [], tbs: [], bonus: [] }; S.pkInviting = null;
   render(); loadPkWeek(); window.scrollTo({ top: $("#view").offsetTop - 10, behavior: "smooth" });
 }
 const gameStarted = (g) => Date.parse(g.starts_at) <= Date.now();
@@ -1011,9 +1027,20 @@ function pkGameCard(g, v, tbId, mine) {
     if (!locked && mine) tb = `<div class="pktb"><label for="pkTb">Tiebreaker: total points in this game</label><div class="pkjoin"><input id="pkTb" type="number" inputmode="numeric" min="0" max="200" value="${myTb ?? ""}" placeholder="${g.total ?? ""}"><button class="btn" data-act="pkTb">${myTb != null ? "Update" : "Save"}</button></div>${myTb != null ? `<span class="sub">Saved: ${myTb}</span>` : ""}</div>`;
     else tb = `<div class="pktb"><span class="lab">Tiebreaker (total points)</span><span class="sub">${v.tbs.length ? esc(v.tbs.map((t) => pkName(t.uid) + " " + t.guess).join(" · ")) : locked ? "No guesses." : "Locks at kickoff."}${g.completed ? " · Actual: " + (g.home_score + g.away_score) : ""}</span></div>`;
   }
+  let bonus = "";
+  if (S.pk.v2 && hs != null) {
+    const myBonus = v.bonus.find((x) => x.uid === S.me)?.game_id, isMine = myBonus === g.id;
+    const bonusLocked = myBonus && myBonus !== g.id && gameStarted(v.games.find((x) => x.id === myBonus) || {});
+    if (mine && !locked && !bonusLocked) bonus = `<button class="btn quiet pkbonus ${isMine ? "on" : ""}" aria-pressed="${isMine}" data-act="pkBonus" data-id="${esc(g.id)}">${isMine ? "★ Bonus game: counts double" : "☆ Make this my bonus game"}</button>`;
+    else if (isMine) bonus = `<span class="pkbonus on">★ Your bonus game: counts double</span>`;
+    if (locked) {
+      const others = v.bonus.filter((x) => x.game_id === g.id && x.uid !== S.me).map((x) => pkName(x.uid));
+      if (others.length) bonus += `<span class="sub">★ Bonus game for ${esc(others.join(", "))}</span>`;
+    }
+  }
   return `<article class="card vgame ${locked ? "locked" : ""}">
     <div class="slip-top"><span class="cat">NFL</span><span class="sub">${esc(kickoff(g))}${locked ? " · locked" : ""}${g.id === tbId ? " · tiebreaker" : ""}</span></div>
-    <h3>${esc(g.away)} <span class="sub">at</span> ${esc(g.home)}</h3>${lineRow}${score}${who}${tb}</article>`;
+    <h3>${esc(g.away)} <span class="sub">at</span> ${esc(g.home)}</h3>${lineRow}${bonus}${score}${who}${tb}</article>`;
 }
 function renderPickem() {
   const v = S.pkView, g = pkGroup(v.gid);
@@ -1032,19 +1059,24 @@ function renderPickem() {
   let board;
   if (graded) {
     const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).sort((a, b) => b.points - a.points || b.correct - a.correct);
-    board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}${r.won && r.points > 0 ? " 🏆" : ""}</span></td><td class="num">${r.correct}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
-    board = `<div class="table"><table><thead><tr><th>Final</th><th class="num">Right</th><th class="num">TB off</th><th class="num">Pts</th></tr></thead><tbody>${board}</tbody></table></div>`;
+    const wk = S.pk.weeks.find((w) => w.group_id === g.id && w.week === v.week);
+    board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}${r.won && r.points > 0 ? " 🏆" : ""}</span></td><td class="num">${r.correct}${r.bonus_right ? "+1★" : ""}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
+    board = (wk?.rolled ? `<div class="pkpot">Nobody got half right (best was ${wk.best} of ${wk.games}), so the pot rolled over to next week.</div>` : "")
+      + `<div class="table"><table><thead><tr><th>Final</th><th class="num">Right</th><th class="num">TB off</th><th class="num">Pts</th></tr></thead><tbody>${board}</tbody></table></div>`;
   } else {
     const rows = [...entrants].map((uid) => {
-      const right = v.picks.filter((p) => p.uid === uid && coverSide(v.games.find((x) => x.id === p.game_id) || {}) === p.side).length;
-      return { uid, right, picked: v.picks.filter((p) => p.uid === uid).length };
-    }).sort((a, b) => b.right - a.right);
-    board = rows.length ? `<div class="table"><table><thead><tr><th>So far</th><th class="num">Right</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}</span></td><td class="num">${r.right}</td></tr>`).join("")}</tbody></table></div>`
+      const hits = v.picks.filter((p) => p.uid === uid && coverSide(v.games.find((x) => x.id === p.game_id) || {}) === p.side);
+      const bonusHit = hits.some((p) => p.game_id === v.bonus.find((x) => x.uid === uid)?.game_id);
+      return { uid, right: hits.length, bonusHit, score: hits.length + (bonusHit ? 1 : 0) };
+    }).sort((a, b) => b.score - a.score);
+    const decided = v.games.filter((x) => { const c = coverSide(x); return c && c !== "push"; }).length;
+    board = rows.length ? `<div class="table"><table><thead><tr><th>So far</th><th class="num">Right</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}</span></td><td class="num">${r.right}${r.bonusHit ? "+1★" : ""}</td></tr>`).join("")}</tbody></table></div>`
+      + (S.pk.v2 && decided ? `<span class="sub">${decided} game${decided === 1 ? "" : "s"} decided so far. The winner needs at least half of the week's games right.</span>` : "")
       : `<span class="sub">No entries yet this week.</span>`;
   }
   const myCount = v.picks.filter((p) => p.uid === S.me).length, open = pool.filter((x) => !gameStarted(x)).length;
   const status = mine
-    ? `<span class="sub">You've picked <b>${myCount} of ${pool.length}</b>${open ? ` · ${open} still open` : " · all locked"}. Each game locks at kickoff; an unpicked game counts as a miss. Tap a pick again to clear it. Other people's picks show once a game kicks off.</span>`
+    ? `<span class="sub">You've picked <b>${myCount} of ${pool.length}</b>${open ? ` · ${open} still open` : " · all locked"}. Each game locks at kickoff; an unpicked game counts as a miss. Tap a pick again to clear it.${S.pk.v2 ? ` Bonus game: ${v.bonus.some((x) => x.uid === S.me) ? "set" : "<b>not picked yet</b>"}.` : ""} Other people's picks show once a game kicks off.</span>`
     : `<span class="sub">You're not in this group. Picks show once each game kicks off.</span>`;
   let day = "", out = "";
   for (const x of v.games) {
@@ -1071,6 +1103,29 @@ async function pkSaveTb() {
   const { error } = await sb.rpc("save_pickem_tiebreak", { p_group: v.gid, p_week: v.week, p_guess: n });
   if (error) return toast(friendly(error));
   toast(n == null ? "Tiebreaker cleared" : "Tiebreaker saved: " + n); loadPkWeek();
+}
+async function pkBonus(game) {
+  const v = S.pkView; if (!v) return;
+  const cur = v.bonus.find((x) => x.uid === S.me)?.game_id, next = cur === game ? null : game;
+  v.bonus = v.bonus.filter((x) => x.uid !== S.me);
+  if (next) v.bonus.push({ group_id: v.gid, uid: S.me, week: v.week, game_id: next });
+  render();
+  const { error } = await sb.rpc("save_pickem_bonus", { p_group: v.gid, p_week: v.week, p_game: next });
+  if (error) { toast(friendly(error)); loadPkWeek(); }
+}
+async function pkCrash(gid) {
+  const { error } = await sb.rpc("request_pickem_crash", { p_group: gid });
+  if (error) return toast(friendly(error));
+  notifyQuiet({ pickem_group: gid });
+  await loadPickem(); render();
+  toast("Asked " + pkName(pkGroup(gid)?.created_by) + " if you can crash.");
+}
+async function pkAnswer(gid, uid, yes) {
+  const { error } = await sb.rpc("answer_pickem_crash", { p_group: gid, p_uid: uid, p_accept: yes });
+  if (error) return toast(friendly(error));
+  notifyQuiet({ pickem_group: gid, uid });
+  await loadPickem(); render();
+  toast(yes ? pkName(uid) + " is in." : "Told " + pkName(uid) + " no.");
 }
 async function pkCreate() {
   const name = $("#pkName")?.value.trim(), err = (m) => { const e = $("#pkErr"); if (e) { e.textContent = m; e.hidden = false; } };
@@ -1165,6 +1220,10 @@ const ACT = {
   pkWeek: (el) => pkOpen(S.pkView.gid, weekShift(S.pkView.week, +el.dataset.v)),
   pkPick: (el) => pkPick(S.pkView.gid, el.dataset.id, el.dataset.v),
   pkTb: () => pkSaveTb(),
+  pkBonus: (el) => pkBonus(el.dataset.id),
+  pkCrash: (el) => pkCrash(el.dataset.id),
+  pkLetIn: (el) => pkAnswer(el.dataset.id, el.dataset.v, true),
+  pkSayNo: (el) => pkAnswer(el.dataset.id, el.dataset.v, false),
   filter: (el) => { S.filter = el.dataset.v; render(); },
   feedFilter: (el) => { S.feedFilter = el.dataset.v; S.crashing = null; render(); },
   new: () => openSheet(),

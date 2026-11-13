@@ -81,7 +81,13 @@ When the week's games are final, `grade_pickem()` scores it (hourly pg_cron job 
 
 Final scores come from the same `vegas-lines` function: it pulls scores only while a game is in progress (at most every 3 hours, 2 credits each).
 
-Run `update-pickem.sql` after `update-vegas-lines.sql`.
+**Can I crash?** Anyone outside a group can ask to crash it; the group's creator gets a notification and lets them in or says no.
+
+**Bonus game:** each entry stars one game a week; getting it right counts double. It locks at that game's kickoff and stays hidden until then.
+
+**Half right or it rolls over:** the winner needs at least half of the week's games right (games on the number don't count). Otherwise no points move and every entry's 5-point ante rolls over (`pickem_carry`). The next winner collects each rolled ante from everyone but themselves. Group standings add up `pickem_ledger`.
+
+Run `update-pickem.sql` after `update-vegas-lines.sql`, then `update-pickem-2.sql`. Redeploy `notify` for the crash-request notifications.
 
 ## Good to know
 
