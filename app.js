@@ -33,7 +33,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  phones: new Map(), refPhones: new Map(), proofUrls: new Map(), proving: null, proofDraft: {}, objecting: null, objDraft: "", notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, lines: null, linesErr: "", authMode: "phone", myInvites: new Set(), phone: "",
+  phones: new Map(), refPhones: new Map(), proofUrls: new Map(), proving: null, proofDraft: {}, objecting: null, objDraft: "", notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, lines: null, linesErr: "", pk: null, pkView: null, pkNaming: false, pkInviting: null, authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", prove: "Prove it!", proved: "Proof posted", referee: "With the referee", settled: "Done and done", void: "Called off", hopeless: "Hopeless" };
@@ -70,7 +70,7 @@ function fromRow(r) {
     objection: r.objection || "", referee: r.referee_uid || r.referee_name ? { uid: r.referee_uid, name: r.referee_name || "the referee" } : null,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
     counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
-    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null,
+    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null, pickem: r.pickem_group || null,
     createdAt: Date.parse(r.created_at), decidedAt: r.decided_at ? Date.parse(r.decided_at) : null, log: r.log || [],
   };
 }
@@ -765,13 +765,14 @@ function crashPanel(b) {
 }
 const FEED_FILTERS = [["crash", "Open to crash"], ["live", "In play"], ["all", "Everything"]];
 function renderFeed() {
-  if (!S.bets.length) return `<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div>`;
+  const bets = S.bets.filter((b) => !b.pickem);
+  if (!bets.length) return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div></div>`;
   const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
-  const list = S.bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  const chips = FEED_FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.feedFilter === k}" data-act="feedFilter" data-v="${k}">${l} <span class="mono">${S.bets.filter((b) => pass(b, k)).length}</span></button>`).join("");
+  const list = bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const chips = FEED_FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.feedFilter === k}" data-act="feedFilter" data-v="${k}">${l} <span class="mono">${bets.filter((b) => pass(b, k)).length}</span></button>`).join("");
   const empty = S.feedFilter === "crash" ? `<div class="empty"><p>Nothing open to crash right now. Predictions you're already in, or have crashed, don't show here.</p></div>` : `<div class="empty"><p>Nothing here right now.</p></div>`;
-  return `<div style="display:flex;flex-direction:column;gap:14px"><div class="secthead"><h2>Everyone's predictions</h2><span class="sub">Everything you're allowed to see, newest first</span></div>
-    <div class="filters">${chips}</div><div class="feed">${list.length ? list.map(feedCard).join("") : empty}</div></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div style="display:flex;flex-direction:column;gap:14px"><div class="secthead"><h2>Everyone's predictions</h2><span class="sub">Everything you're allowed to see, newest first</span></div>
+    <div class="filters">${chips}</div><div class="feed">${list.length ? list.map(feedCard).join("") : empty}</div></div></div>`;
 }
 function rivalSentence(r) {
   const nm = esc(r.name);
@@ -864,7 +865,8 @@ function vegasCard(g) {
 function renderVegas() {
   if (S.lines === null) { loadLines(); return `<div class="empty"><h3>Calling Vegas…</h3><p>Pulling this week's NFL opening lines.</p></div>`; }
   if (S.linesErr) return `<div class="empty"><h3>No lines yet</h3><p>${esc(S.linesErr)}</p></div>`;
-  const head = `<div class="secthead"><h2>Vegas lines</h2><span class="sub">NFL opening lines. Tap a side to call it against a friend.</span></div>`;
+  const head = `<div class="secthead"><h2>Vegas lines</h2><span class="sub">NFL opening lines. Tap a side to call it against a friend.</span></div>`
+    + (S.pk && !S.pk.off ? `<div class="pkbanner"><span><b>Pick 'em All!</b> Run a weekly pool with your group: every game against these spreads.</span><button class="btn" data-act="pkGo">Go</button></div>` : "");
   if (!S.lines.length) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>No upcoming games with lines yet. New lines come in every morning.</p></div></div>`;
   let day = "", out = "";
   for (const g of S.lines) {
@@ -887,12 +889,224 @@ function vegasPick(id, pick) {
   openSheet(null, null, { title, terms, due: ymd(new Date(g.starts_at)), shakeBy: Date.parse(g.starts_at) });
 }
 
+/* ---------- Pick 'em All! (weekly NFL pools) ---------- */
+const PK_TZ = "America/Los_Angeles";
+const ptYmd = (d) => new Date(d).toLocaleDateString("en-CA", { timeZone: PK_TZ });
+// the Tuesday (Pacific) that starts the NFL week a moment belongs to; matches nfl_week() in the database
+function nflWeek(t) {
+  const d = new Date(ptYmd(t) + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 5) % 7));
+  return d.toISOString().slice(0, 10);
+}
+const weekShift = (wk, n) => { const d = new Date(wk + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + 7 * n); return d.toISOString().slice(0, 10); };
+const weekLabel = (wk) => "Week of " + new Date(wk + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const pkGroup = (id) => S.pk.groups.find((g) => g.id === id);
+const pkMembers = (id) => S.pk.members.filter((m) => m.group_id === id);
+const pkIsMember = (id) => !!S.me && pkMembers(id).some((m) => m.uid === S.me);
+const pkName = (uid) => personName(uid) || "Someone";
+
+async function loadPickem() {
+  const [g, m, r, w, c] = await Promise.all([
+    sb.from("pickem_groups").select("id,name,created_by,created_at").order("created_at"),
+    sb.from("pickem_members").select("*"),
+    sb.from("pickem_results").select("*"),
+    sb.from("pickem_weeks").select("*").order("week", { ascending: false }),
+    sb.rpc("my_pickem_codes"),
+  ]);
+  if (g.error) { S.pk = { ...S.pk, off: true }; return; }
+  S.pk = { off: false, groups: g.data || [], members: m.data || [], results: r.data || [], weeks: w.data || [],
+    codes: new Map((c.data || []).map((x) => [x.group_id, x.code])) };
+}
+function pkTotals(gid) {
+  const rows = new Map(pkMembers(gid).map((m) => [m.uid, { uid: m.uid, name: pkName(m.uid), points: 0, won: 0, weeks: 0 }]));
+  for (const r of S.pk.results.filter((x) => x.group_id === gid)) {
+    const row = rows.get(r.uid) || { uid: r.uid, name: pkName(r.uid), points: 0, won: 0, weeks: 0 };
+    row.points += r.points; row.weeks++; if (r.won && r.points > 0) row.won++;
+    rows.set(r.uid, row);
+  }
+  return [...rows.values()].sort((a, b) => b.points - a.points || b.won - a.won || a.name.localeCompare(b.name));
+}
+function pkInviteText(g) {
+  const code = S.pk.codes.get(g.id);
+  return `Join my Pick 'em All! group "${g.name}" on Handshake. Every week, pick every NFL game against the spread. The week's winner takes 5 pts from everyone else. Tap to join: ${PAGE_URL}?join=${code} (or enter code ${code} on the Everyone tab).`;
+}
+function pkCard(g) {
+  const mine = pkIsMember(g.id), rows = pkTotals(g.id);
+  const last = S.pk.weeks.find((w) => w.group_id === g.id);
+  const lastWinners = last ? S.pk.results.filter((r) => r.group_id === g.id && r.week === last.week && r.won && r.points > 0) : [];
+  const lastLine = !last ? "" : lastWinners.length
+    ? `<div class="sub">${esc(weekLabel(last.week))}: ${esc(listNames(lastWinners.map((r) => pkName(r.uid))))} won, ${signed(lastWinners[0].points)} pts</div>`
+    : `<div class="sub">${esc(weekLabel(last.week))}: no points moved (${last.entries} entr${last.entries === 1 ? "y" : "ies"})</div>`;
+  const table = `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Weeks won</th></tr></thead><tbody>${rows.map((r, i) =>
+    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.uid === S.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td></tr>`).join("")}</tbody></table></div>`;
+  let acts;
+  if (mine) acts = `<div class="acts"><button class="btn primary" data-act="pkOpen" data-id="${g.id}">Make your picks</button><button class="btn ghost" data-act="pkInvite" data-id="${g.id}">Invite friends</button></div>`;
+  else acts = `<div class="acts"><button class="btn ghost" data-act="pkOpen" data-id="${g.id}">See picks</button><span class="sub">Invite only. Ask ${esc(pkName(g.created_by))} for the link.</span></div>`;
+  let invite = "";
+  if (S.pkInviting === g.id && S.pk.codes.get(g.id)) {
+    const text = pkInviteText(g);
+    invite = `<div class="cpanel"><span class="lab">Invite code <b class="mono">${esc(S.pk.codes.get(g.id))}</b></span><p class="msg" id="pkInviteText">${esc(text)}</p>
+      <div class="acts"><button class="btn primary" data-act="pkCopyInvite" data-id="${g.id}">Copy invite</button><a class="btn" href="${esc(smsHref("", text))}">Open Messages</a><button class="btn ghost" data-act="pkCloseInvite">Close</button></div></div>`;
+  }
+  return `<article class="card pkcard">
+    <div class="slip-top"><span class="cat">Pick 'em All!</span><span class="sub">${rows.length} member${rows.length === 1 ? "" : "s"}</span></div>
+    <h3>${esc(g.name)}</h3>${lastLine}${table}${acts}${invite}</article>`;
+}
+function pkSection() {
+  if (!S.pk || S.pk.off) return "";
+  const groups = S.pk.groups.slice().sort((a, b) => pkIsMember(b.id) - pkIsMember(a.id) || Date.parse(b.created_at) - Date.parse(a.created_at));
+  const create = S.pkNaming
+    ? `<div class="card"><div class="field"><label for="pkName">Name your group</label><input id="pkName" maxlength="30" placeholder="Sunday Degenerates" autocomplete="off"></div>
+        <p class="err" id="pkErr" hidden></p><div class="acts"><button class="btn primary" data-act="pkCreate">Start the group</button><button class="btn ghost" data-act="pkUnname">Cancel</button></div></div>`
+    : "";
+  const join = `<div class="pkjoin"><input id="pkCode" maxlength="6" placeholder="Invite code" autocomplete="off" autocapitalize="characters" aria-label="Invite code"><button class="btn" data-act="pkJoin">Join</button></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:10px">
+    <div class="secthead"><h2>Pick 'em All!</h2>${S.pkNaming ? "" : `<button class="btn quiet" data-act="pkName">Start a group</button>`}</div>
+    <span class="sub">Weekly NFL pools. Pick every game against the Vegas opening spread, plus the Monday night total as the tiebreaker. The week's winner gets 5 pts for every other entry; everyone else gives up 5.</span>
+    ${create}${groups.length ? `<div class="cards">${groups.map(pkCard).join("")}</div>` : ""}${join}</div>`;
+}
+
+/* the picks screen for one group and week */
+async function loadPkWeek() {
+  const v = S.pkView; if (!v) return;
+  const from = new Date(Date.parse(v.week + "T00:00:00Z") - DAY).toISOString(), to = new Date(Date.parse(v.week + "T00:00:00Z") + 8 * DAY).toISOString();
+  const { data: games, error } = await sb.from("vegas_lines").select("*").gte("starts_at", from).lt("starts_at", to).order("starts_at");
+  if (error) { v.err = friendly(error); v.games = []; render(); return; }
+  v.games = (games || []).filter((g) => nflWeek(g.starts_at) === v.week);
+  const ids = v.games.map((g) => g.id);
+  const [p, t] = await Promise.all([
+    ids.length ? sb.from("pickem_picks").select("*").eq("group_id", v.gid).in("game_id", ids) : { data: [] },
+    sb.from("pickem_tiebreaks").select("*").eq("group_id", v.gid).eq("week", v.week),
+  ]);
+  v.picks = p.data || []; v.tbs = t.data || []; v.err = "";
+  render();
+}
+function pkOpen(gid, week) {
+  S.pkView = { gid, week: week || nflWeek(Date.now()), games: null, picks: [], tbs: [] }; S.pkInviting = null;
+  render(); loadPkWeek(); window.scrollTo({ top: $("#view").offsetTop - 10, behavior: "smooth" });
+}
+const gameStarted = (g) => Date.parse(g.starts_at) <= Date.now();
+function coverSide(g) {  // which side covered the opening spread, or "push"
+  if (!g.completed || g.home_spread == null) return null;
+  const m = g.home_score - g.away_score + +g.home_spread;
+  return m > 0 ? "home" : m < 0 ? "away" : "push";
+}
+function pkGameCard(g, v, tbId, mine) {
+  const hs = g.home_spread == null ? null : +g.home_spread, my = v.picks.find((p) => p.game_id === g.id && p.uid === S.me)?.side;
+  const locked = gameStarted(g), cov = coverSide(g);
+  const mark = (s) => (my !== s || !cov ? "" : cov === "push" ? " · push" : cov === s ? " ✓" : " ✗");
+  const btn = (s, label) => `<button class="btn ghost vpick ${my === s ? "on" : ""}" aria-pressed="${my === s}" data-act="pkPick" data-id="${esc(g.id)}" data-v="${s}" ${locked || !mine ? "disabled" : ""}>${label}${mark(s)}</button>`;
+  const lineRow = hs == null ? `<span class="sub">No spread posted, so this game isn't in the pool.</span>`
+    : `<div class="vrow">${btn("away", esc(nick(g.away)) + " <b class=\"mono\">" + lineTxt(-hs) + "</b>")}${btn("home", esc(nick(g.home)) + " <b class=\"mono\">" + lineTxt(hs) + "</b>")}</div>`;
+  let who = "";
+  if (locked && hs != null) {
+    const by = (s) => v.picks.filter((p) => p.game_id === g.id && p.side === s).map((p) => pkName(p.uid));
+    const a = by("away"), h = by("home");
+    who = a.length || h.length ? `<span class="sub">${esc(nick(g.away))}: ${a.length ? esc(a.join(", ")) : "nobody"} · ${esc(nick(g.home))}: ${h.length ? esc(h.join(", ")) : "nobody"}</span>` : `<span class="sub">Nobody picked this game.</span>`;
+  }
+  const score = g.home_score != null ? `<span class="sub mono">${g.completed ? "Final" : "Latest"}: ${esc(nick(g.away))} ${g.away_score}, ${esc(nick(g.home))} ${g.home_score}${cov ? " · " + (cov === "push" ? "push on the spread" : esc(nick(cov === "home" ? g.home : g.away)) + " covered") : ""}</span>` : "";
+  let tb = "";
+  if (g.id === tbId) {
+    const myTb = v.tbs.find((t) => t.uid === S.me)?.guess;
+    if (!locked && mine) tb = `<div class="pktb"><label for="pkTb">Tiebreaker: total points in this game</label><div class="pkjoin"><input id="pkTb" type="number" inputmode="numeric" min="0" max="200" value="${myTb ?? ""}" placeholder="${g.total ?? ""}"><button class="btn" data-act="pkTb">${myTb != null ? "Update" : "Save"}</button></div>${myTb != null ? `<span class="sub">Saved: ${myTb}</span>` : ""}</div>`;
+    else tb = `<div class="pktb"><span class="lab">Tiebreaker (total points)</span><span class="sub">${v.tbs.length ? esc(v.tbs.map((t) => pkName(t.uid) + " " + t.guess).join(" · ")) : locked ? "No guesses." : "Locks at kickoff."}${g.completed ? " · Actual: " + (g.home_score + g.away_score) : ""}</span></div>`;
+  }
+  return `<article class="card vgame ${locked ? "locked" : ""}">
+    <div class="slip-top"><span class="cat">NFL</span><span class="sub">${esc(kickoff(g))}${locked ? " · locked" : ""}${g.id === tbId ? " · tiebreaker" : ""}</span></div>
+    <h3>${esc(g.away)} <span class="sub">at</span> ${esc(g.home)}</h3>${lineRow}${score}${who}${tb}</article>`;
+}
+function renderPickem() {
+  const v = S.pkView, g = pkGroup(v.gid);
+  if (!g) { S.pkView = null; return renderFeed(); }
+  const mine = pkIsMember(g.id), cur = nflWeek(Date.now());
+  const nav = `<div class="filters"><button class="chipbtn" data-act="pkWeek" data-v="-1">‹ Earlier</button><span class="sub" style="font-weight:600">${esc(weekLabel(v.week))}${v.week === cur ? " (this week)" : ""}</span>${v.week < weekShift(cur, 1) ? `<button class="chipbtn" data-act="pkWeek" data-v="1">Later ›</button>` : ""}</div>`;
+  const head = `<div class="secthead"><h2>${esc(g.name)}</h2><button class="btn quiet" data-act="pkBack">‹ All groups</button></div>${nav}`;
+  if (v.games === null) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>Loading the week…</p></div></div>`;
+  if (v.err) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>${esc(v.err)}</p></div></div>`;
+  const pool = v.games.filter((x) => x.home_spread != null);
+  if (!v.games.length) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>No games with lines for this week yet. New lines come in every morning.</p></div></div>`;
+  const tbId = [...v.games].filter((x) => x.total != null).sort((a, b) => Date.parse(b.starts_at) - Date.parse(a.starts_at) || (a.id < b.id ? 1 : -1))[0]?.id;
+  // this week's leaderboard: graded results if the week is done, otherwise right so far
+  const graded = S.pk.weeks.some((w) => w.group_id === g.id && w.week === v.week);
+  const entrants = new Set([...v.picks.map((p) => p.uid), ...v.tbs.map((t) => t.uid)]);
+  let board;
+  if (graded) {
+    const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).sort((a, b) => b.points - a.points || b.correct - a.correct);
+    board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}${r.won && r.points > 0 ? " 🏆" : ""}</span></td><td class="num">${r.correct}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
+    board = `<div class="table"><table><thead><tr><th>Final</th><th class="num">Right</th><th class="num">TB off</th><th class="num">Pts</th></tr></thead><tbody>${board}</tbody></table></div>`;
+  } else {
+    const rows = [...entrants].map((uid) => {
+      const right = v.picks.filter((p) => p.uid === uid && coverSide(v.games.find((x) => x.id === p.game_id) || {}) === p.side).length;
+      return { uid, right, picked: v.picks.filter((p) => p.uid === uid).length };
+    }).sort((a, b) => b.right - a.right);
+    board = rows.length ? `<div class="table"><table><thead><tr><th>So far</th><th class="num">Right</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}</span></td><td class="num">${r.right}</td></tr>`).join("")}</tbody></table></div>`
+      : `<span class="sub">No entries yet this week.</span>`;
+  }
+  const myCount = v.picks.filter((p) => p.uid === S.me).length, open = pool.filter((x) => !gameStarted(x)).length;
+  const status = mine
+    ? `<span class="sub">You've picked <b>${myCount} of ${pool.length}</b>${open ? ` · ${open} still open` : " · all locked"}. Each game locks at kickoff; an unpicked game counts as a miss. Tap a pick again to clear it. Other people's picks show once a game kicks off.</span>`
+    : `<span class="sub">You're not in this group. Picks show once each game kicks off.</span>`;
+  let day = "", out = "";
+  for (const x of v.games) {
+    const d = gameDay(x);
+    if (d !== day) { if (day) out += `</div>`; out += `<h3 class="vday">${esc(d)}</h3><div class="cards">`; day = d; }
+    out += pkGameCard(x, v, tbId, mine);
+  }
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head}${status}${board}${out}</div></div>`;
+}
+async function pkPick(gid, game, side) {
+  const v = S.pkView; if (!v) return;
+  const cur = v.picks.find((p) => p.game_id === game && p.uid === S.me);
+  const next = cur?.side === side ? null : side;
+  v.picks = v.picks.filter((p) => !(p.game_id === game && p.uid === S.me));
+  if (next) v.picks.push({ group_id: gid, uid: S.me, game_id: game, side: next });
+  render();
+  const { error } = await sb.rpc("save_pickem_pick", { p_group: gid, p_game: game, p_side: next });
+  if (error) { toast(friendly(error)); loadPkWeek(); }
+}
+async function pkSaveTb() {
+  const v = S.pkView; if (!v) return;
+  const raw = $("#pkTb")?.value.trim(), n = raw === "" ? null : Math.round(+raw);
+  if (n != null && !(n >= 0 && n <= 200)) return toast("Guess a total between 0 and 200.");
+  const { error } = await sb.rpc("save_pickem_tiebreak", { p_group: v.gid, p_week: v.week, p_guess: n });
+  if (error) return toast(friendly(error));
+  toast(n == null ? "Tiebreaker cleared" : "Tiebreaker saved: " + n); loadPkWeek();
+}
+async function pkCreate() {
+  const name = $("#pkName")?.value.trim(), err = (m) => { const e = $("#pkErr"); if (e) { e.textContent = m; e.hidden = false; } };
+  if (!name) return err("Give the group a name.");
+  const { data, error } = await sb.rpc("create_pickem_group", { p_name: name });
+  if (error) return err(friendly(error));
+  S.pkNaming = false; await loadPickem(); S.pkInviting = data; render();
+  toast(name + " is ready. Send the invite to your group.");
+}
+async function pkJoin(code) {
+  code = String(code || "").trim().toUpperCase();
+  if (!code) return toast("Type the invite code first.");
+  const { data, error } = await sb.rpc("join_pickem_group", { p_code: code });
+  if (error) return toast(friendly(error));
+  await loadPickem(); S.tab = "feed";
+  toast("You're in " + (pkGroup(data)?.name || "the group") + ". Make your picks!");
+  pkOpen(data);
+}
+/* invite links: ?join=CODE, remembered through sign-up */
+(() => {
+  const code = new URLSearchParams(location.search).get("join");
+  if (code) { store.set("hs-join", code.toUpperCase()); history.replaceState(null, "", location.pathname); }
+})();
+async function pkJoinPending() {
+  const code = store.get("hs-join");
+  if (!code || !S.me) return;
+  store.set("hs-join", "");
+  await pkJoin(code);
+}
+
 function render() {
   renderLedger(); renderBell();
   for (const t of ["board", "feed", "rivals", "vegas"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
+  v.innerHTML = S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -936,8 +1150,21 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { S.tab = el.dataset.v; S.picking = null; S.notify = null; if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  tab: (el) => { S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
   vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
+  pkGo: () => { S.tab = "feed"; S.pkView = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
+  pkName: () => { S.pkNaming = true; render(); setTimeout(() => $("#pkName")?.focus(), 30); },
+  pkUnname: () => { S.pkNaming = false; render(); },
+  pkCreate: () => pkCreate(),
+  pkJoin: () => pkJoin($("#pkCode")?.value),
+  pkInvite: (el) => { S.pkInviting = S.pkInviting === el.dataset.id ? null : el.dataset.id; render(); },
+  pkCloseInvite: () => { S.pkInviting = null; render(); },
+  pkCopyInvite: (el) => copy(pkInviteText(pkGroup(el.dataset.id)), "Invite copied. Paste it into your group text."),
+  pkOpen: (el) => pkOpen(el.dataset.id),
+  pkBack: () => { S.pkView = null; render(); },
+  pkWeek: (el) => pkOpen(S.pkView.gid, weekShift(S.pkView.week, +el.dataset.v)),
+  pkPick: (el) => pkPick(S.pkView.gid, el.dataset.id, el.dataset.v),
+  pkTb: () => pkSaveTb(),
   filter: (el) => { S.filter = el.dataset.v; render(); },
   feedFilter: (el) => { S.feedFilter = el.dataset.v; S.crashing = null; render(); },
   new: () => openSheet(),
@@ -1356,7 +1583,7 @@ function liveUpdates() {
     .on("postgres_changes", { event: "*", schema: "public", table: "settlements" }, () => { loadSettlements().then(render).catch(() => {}); })
     .on("postgres_changes", { event: "*", schema: "public", table: "settlement_requests" }, () => { loadSettlements().then(render).catch(() => {}); })
     .subscribe();
-  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); await loadSettlements(); render(); } catch (e) {} } });
+  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); await loadSettlements(); await loadPickem().catch(() => {}); if (S.pkView) loadPkWeek(); render(); } catch (e) {} } });
 }
 
 /* ---------- what's new: activity since your last look ---------- */
@@ -1688,10 +1915,11 @@ async function enterOnce() {
   if (!prof?.name) { $("#gName").value = ""; return showGate("name"); }
   S.myName = prof.name; $("#whoName").textContent = "Signed in as " + prof.name;
   showGate(null); render();
-  try { await Promise.all([loadBets(), loadPeople(), loadSettlements()]); render(); }
+  try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {})]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }
   if (!started) { started = true; liveUpdates(); setupAppPush(); }
   clearBadge();
+  pkJoinPending();
   if (S.pendingAppToken) saveAppToken(S.pendingAppToken);
 }
 

@@ -67,11 +67,21 @@ Sending happens in a Supabase Edge Function, `supabase/functions/notify/index.ts
 
 The **Vegas** tab lists upcoming NFL games with their opening spread and over/under. Tapping a side opens a new prediction with the line, the game date and a shake-by time of kickoff already filled in.
 
-Lines come from [The Odds API](https://the-odds-api.com) (free plan: 500 credits a month; each daily pull costs 2). The Edge Function `supabase/functions/vegas-lines/index.ts` runs every morning at 6 AM Pacific from the pg_cron job `handshake-vegas-lines`. It keeps the first line it saves for each game and never overwrites it.
+Lines come from [The Odds API](https://the-odds-api.com) (free plan: 500 credits a month; each daily pull costs 2). The Edge Function `supabase/functions/vegas-lines/index.ts` is called hourly by the pg_cron job `handshake-vegas-lines`; it pulls lines once a day after 6 AM Pacific and keeps the first line it saves for each game, never overwriting it.
 
 1. Run `update-vegas-lines.sql` (already in `schema.sql` for fresh installs).
 2. Under **Edge Functions → Secrets**, add `ODDS_API_KEY`.
-3. Create an Edge Function named exactly `vegas-lines`, paste in that file, turn **Verify JWT** off, and deploy. It won't pull more than once every 20 hours, so extra calls can't use up the credits.
+3. Create an Edge Function named exactly `vegas-lines`, paste in that file, turn **Verify JWT** off, and deploy. Its own limits (lines once a day, scores only during games) mean extra calls can't use up the credits.
+
+## Pick 'em All! (weekly NFL pools)
+
+On the **Everyone** tab, anyone can start a named group and invite friends with a link or a 6-letter code. Each week (Tuesday through Monday night, Pacific) every member picks every NFL game against the Vegas opening spread, plus the total points in the Monday night game as the tiebreaker. Picks lock at each game's kickoff, and nobody sees anyone else's pick on a game until it kicks off.
+
+When the week's games are final, `grade_pickem()` scores it (hourly pg_cron job `handshake-pickem-grade`, and after each scores pull). Most right wins; closest tiebreaker breaks a tie; still tied = co-winners. A game that lands on the number counts for nobody. Each winner gets +5 per losing entry and each loser gets −5 per winner. Points are booked as finished predictions between each winner and each loser (marked with `pickem_group`), so Standings, Rivals and settle-up include them; they stay off the Everyone feed and out of the prediction count.
+
+Final scores come from the same `vegas-lines` function: it pulls scores only while a game is in progress (at most every 3 hours, 2 credits each).
+
+Run `update-pickem.sql` after `update-vegas-lines.sql`.
 
 ## Good to know
 

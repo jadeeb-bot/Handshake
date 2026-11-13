@@ -20,7 +20,12 @@ create table if not exists public.vegas_lines (
 );
 create index if not exists vegas_lines_starts on public.vegas_lines (starts_at);
 
--- One row per pull, so the function never pulls more than once a day.
+-- Final scores (filled in by the same function, used to grade Pick 'em All!).
+alter table public.vegas_lines add column if not exists home_score int;
+alter table public.vegas_lines add column if not exists away_score int;
+alter table public.vegas_lines add column if not exists completed boolean not null default false;
+
+-- One row per pull, so the function never pulls more than it should.
 create table if not exists public.vegas_pulls (
   id           bigint generated always as identity primary key,
   pulled_at    timestamptz not null default now(),
@@ -28,6 +33,7 @@ create table if not exists public.vegas_pulls (
   credits_left int,
   note         text
 );
+alter table public.vegas_pulls add column if not exists kind text not null default 'lines';
 
 alter table public.vegas_lines enable row level security;
 alter table public.vegas_pulls enable row level security;
@@ -57,13 +63,14 @@ end $$;
 revoke all on function public.save_vegas_lines(jsonb) from public, anon, authenticated;
 grant execute on function public.save_vegas_lines(jsonb) to service_role;
 
--- Run the pull every morning at 6 AM Pacific (14:00 UTC).
+-- Call the puller every hour. It pulls lines once a day (after 6 AM Pacific) and scores only
+-- while games are in progress, so most calls do nothing.
 create extension if not exists pg_net;
 do $$
 begin
   create extension if not exists pg_cron;
   perform cron.unschedule('handshake-vegas-lines') where exists (select 1 from cron.job where jobname = 'handshake-vegas-lines');
-  perform cron.schedule('handshake-vegas-lines', '0 14 * * *',
+  perform cron.schedule('handshake-vegas-lines', '0 * * * *',
     $job$select net.http_post(url := 'https://akgrilycmjrskuqelhju.supabase.co/functions/v1/vegas-lines',
                               headers := '{"Content-Type": "application/json"}'::jsonb, body := '{}'::jsonb)$job$);
 end $$;

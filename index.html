@@ -141,6 +141,15 @@ tr.me td{background:var(--pen-soft)}
 .vgame h3{margin:0;font-size:17px}
 .vrow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .vpick{text-align:center}
+.vpick.on{background:var(--ink);border-color:var(--ink);color:var(--slip)}
+.vpick:disabled{opacity:1;cursor:default}
+.vgame.locked .vpick:not(.on){opacity:.55}
+.pkjoin{display:flex;gap:6px;align-items:center}
+.pkjoin input{flex:1 1 auto;min-width:0;max-width:200px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:15px;background:var(--slip)}
+.pktb{display:flex;flex-direction:column;gap:6px;border-top:1px dashed var(--line);padding-top:8px}
+.pktb label{font-size:13px;font-weight:600}
+.pkcard h3{margin:0;font-size:19px}
+.pkbanner{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:10px 14px;font-size:14px}
 .card{background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .rname{display:flex;align-items:center;gap:10px}
 .av{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:600;font-size:13px;background:var(--pen-soft);color:var(--pen);flex:none}
