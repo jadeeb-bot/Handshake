@@ -1155,6 +1155,23 @@ async function pkJoinPending() {
   store.set("hs-join", "");
   await pkJoin(code);
 }
+/* In the iPhone app, invite links (universal links) open the app instead of Safari. */
+if (IN_APP) {
+  const appPlugin = capPlugin("App");
+  let lastLink = "";
+  const fromLink = (url) => {
+    let code = "";
+    try { code = new URL(url).searchParams.get("join") || ""; } catch (e) {}
+    if (!code || code === lastLink) return;
+    lastLink = code;
+    store.set("hs-join", code.toUpperCase());
+    if (S.me) pkJoinPending();  // otherwise it joins right after sign-in
+  };
+  try {
+    appPlugin?.addListener("appUrlOpen", (e) => fromLink(e?.url));
+    appPlugin?.getLaunchUrl?.().then((r) => r?.url && fromLink(r.url)).catch(() => {});
+  } catch (e) {}
+}
 
 function render() {
   renderLedger(); renderBell();

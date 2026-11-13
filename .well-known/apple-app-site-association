@@ -1,0 +1,13 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["887FTHRCN9.com.jadeeb.handshake"],
+        "components": [
+          { "/": "/", "?": { "join": "?*" }, "comment": "Pick 'em All! invite links open the app" },
+          { "/": "/index.html", "?": { "join": "?*" }, "comment": "same, with index.html" }
+        ]
+      }
+    ]
+  }
+}
