@@ -33,7 +33,7 @@ const S = {
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
   picking: null, busy: new Set(), fresh: null, stakeKind: "points",
   pickedUid: null, pickedName: "", crashing: null, crashSide: null, crashDraft: {},
-  phones: new Map(), refPhones: new Map(), proofUrls: new Map(), proving: null, proofDraft: {}, objecting: null, objDraft: "", notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, authMode: "phone", myInvites: new Set(), phone: "",
+  phones: new Map(), refPhones: new Map(), proofUrls: new Map(), proving: null, proofDraft: {}, objecting: null, objDraft: "", notify: null, countering: null, counterDraft: {}, fixing: null, extending: null, settlements: [], settleReqs: [], settling: null, opps: [], groupInvite: null, lines: null, linesErr: "", authMode: "phone", myInvites: new Set(), phone: "",
 };
 
 const LABEL = { proposed: "Waiting for a handshake", open: "Booked", reported: "Result pending", disputed: "Disputed", prove: "Prove it!", proved: "Proof posted", referee: "With the referee", settled: "Done and done", void: "Called off", hopeless: "Hopeless" };
@@ -836,12 +836,63 @@ function renderRivals() {
   </div>`;
 }
 
+/* ---------- Vegas (NFL opening lines) ---------- */
+const nick = (team) => String(team || "").trim().split(/\s+/).pop();
+const lineTxt = (n) => (n == null ? "" : +n === 0 ? "PK" : (n > 0 ? "+" : "−") + Math.abs(+n));
+const kickoff = (g) => new Date(g.starts_at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+const gameDay = (g) => new Date(g.starts_at).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" });
+async function loadLines() {
+  const { data, error } = await sb.from("vegas_lines").select("*").gt("starts_at", new Date().toISOString()).order("starts_at").limit(200);
+  S.lines = error ? [] : data || [];
+  S.linesErr = error ? (/vegas_lines|schema cache|does not exist/i.test(error.message) ? "Vegas lines aren't switched on yet." : friendly(error)) : "";
+  if (S.tab === "vegas") render();
+}
+function vegasCard(g) {
+  const hs = g.home_spread == null ? null : +g.home_spread;
+  const btn = (pick, label) => `<button class="btn ghost vpick" data-act="vegasPick" data-id="${esc(g.id)}" data-v="${pick}">${label}</button>`;
+  const spread = hs == null ? `<span class="sub">Spread not posted yet</span>`
+    : `<div class="vrow">${btn("away", esc(nick(g.away)) + " <b class=\"mono\">" + lineTxt(-hs) + "</b>")}${btn("home", esc(nick(g.home)) + " <b class=\"mono\">" + lineTxt(hs) + "</b>")}</div>`;
+  const total = g.total == null ? `<span class="sub">Over/under not posted yet</span>`
+    : `<div class="vrow">${btn("over", "Over <b class=\"mono\">" + +g.total + "</b>")}${btn("under", "Under <b class=\"mono\">" + +g.total + "</b>")}</div>`;
+  return `<article class="card vgame">
+    <div class="slip-top"><span class="cat">NFL</span><span class="sub">${esc(kickoff(g))}${g.book ? " · " + esc(g.book) : ""}</span></div>
+    <h3>${esc(g.away)} <span class="sub">at</span> ${esc(g.home)}</h3>
+    <span class="lab">Spread</span>${spread}
+    <span class="lab">Over/under</span>${total}
+  </article>`;
+}
+function renderVegas() {
+  if (S.lines === null) { loadLines(); return `<div class="empty"><h3>Calling Vegas…</h3><p>Pulling this week's NFL opening lines.</p></div>`; }
+  if (S.linesErr) return `<div class="empty"><h3>No lines yet</h3><p>${esc(S.linesErr)}</p></div>`;
+  const head = `<div class="secthead"><h2>Vegas lines</h2><span class="sub">NFL opening lines. Tap a side to call it against a friend.</span></div>`;
+  if (!S.lines.length) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>No upcoming games with lines yet. New lines come in every morning.</p></div></div>`;
+  let day = "", out = "";
+  for (const g of S.lines) {
+    const d = gameDay(g);
+    if (d !== day) { if (day) out += `</div>`; out += `<h3 class="vday">${esc(d)}</h3><div class="cards">`; day = d; }
+    out += vegasCard(g);
+  }
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head}${out}</div></div>`;
+}
+function vegasPick(id, pick) {
+  const g = (S.lines || []).find((x) => x.id === id);
+  if (!g) return;
+  if (Date.parse(g.starts_at) <= Date.now() + 60000) { toast("That game has already started."); S.lines = null; render(); return; }
+  const hs = +g.home_spread, away = nick(g.away), home = nick(g.home);
+  const title = pick === "home" ? `${home} ${lineTxt(hs)} vs ${away}`
+    : pick === "away" ? `${away} ${lineTxt(-hs)} vs ${home}`
+    : `${away} at ${home}: ${pick === "over" ? "Over" : "Under"} ${+g.total} points`;
+  const on = new Date(g.captured_at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const terms = `Vegas opening line${g.book ? " (" + g.book + ", " + on + ")" : ""}. Final score per ESPN, overtime counts. Landing exactly on the number is a tie.`;
+  openSheet(null, null, { title, terms, due: ymd(new Date(g.starts_at)), shakeBy: Date.parse(g.starts_at) });
+}
+
 function render() {
   renderLedger(); renderBell();
-  for (const t of ["board", "feed", "rivals"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
+  for (const t of ["board", "feed", "rivals", "vegas"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
+  v.innerHTML = S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -885,7 +936,8 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { S.tab = el.dataset.v; S.picking = null; S.notify = null; render(); },
+  tab: (el) => { S.tab = el.dataset.v; S.picking = null; S.notify = null; if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
   filter: (el) => { S.filter = el.dataset.v; render(); },
   feedFilter: (el) => { S.feedFilter = el.dataset.v; S.crashing = null; render(); },
   new: () => openSheet(),
@@ -1166,14 +1218,23 @@ function groupInviteBox() {
     <div class="acts"><button class="btn primary" data-act="copyGroup">Copy invite</button><button class="btn ghost" data-act="closeGroup">Close</button></div>
     <span class="sub">Paste it into your group text. Each person signs up with their own number, and their prediction will be waiting.</span></div>`;
 }
-function openSheet(withName, uid) {
+function exactInput(ms) {
+  const d = new Date(ms);
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+function openSheet(withName, uid, preset) {
   $("#pickContactBtn").hidden = !canPickContacts;
   $("#betForm").reset(); $("#formErr").hidden = true; setKind("points"); setVis("all"); S.opps = []; renderOpps();
   S.pickedUid = null; S.pickedName = ""; $("#pickNote").hidden = true; $("#peopleList").hidden = true; $("#withPhoneWrap").hidden = false;
   $("#fDue").value = addDays(7); $("#fPts").value = 10; $("#fShakeBy").value = localInput(Date.now() + DAY); $("#shakeByWrap").hidden = false;
   if (withName) { if (uid) pickPerson(uid, withName); else $("#fWith").value = withName; }
+  if (preset) {
+    $("#fTitle").value = preset.title; $("#fTerms").value = preset.terms; $("#fCat").value = "Sports";
+    if (preset.due) $("#fDue").value = preset.due;
+    if (preset.shakeBy) $("#fShakeBy").value = exactInput(Math.min(preset.shakeBy, Date.now() + 14 * DAY));
+  }
   $("#sheet").hidden = false; $("#sheet").scrollIntoView({ behavior: "smooth", block: "start" });
-  setTimeout(() => $("#fTitle").focus({ preventScroll: true }), 250);
+  setTimeout(() => (preset ? $("#fWith") : $("#fTitle")).focus({ preventScroll: true }), 250);
 }
 $("#betForm").addEventListener("submit", async (e) => {
   e.preventDefault();

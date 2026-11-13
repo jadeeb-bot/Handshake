@@ -63,6 +63,16 @@ Sending happens in a Supabase Edge Function, `supabase/functions/notify/index.ts
 2. Under **Edge Functions → Secrets**, add `VAPID_PRIVATE_KEY` with the private key you were given. Keep it secret; anyone with it could send notifications as Handshake. The matching public key is already in `config.js`.
 3. For notifications in the iPhone app, also add `APNS_KEY_ID`, `APNS_TEAM_ID` and `APNS_PRIVATE_KEY` (the full text of the Apple push key's .p8 file, including the BEGIN and END lines). The key comes from Apple Developer → Certificates, IDs & Profiles → Keys, with Apple Push Notifications service enabled.
 
+## Vegas lines (NFL)
+
+The **Vegas** tab lists upcoming NFL games with their opening spread and over/under. Tapping a side opens a new prediction with the line, the game date and a shake-by time of kickoff already filled in.
+
+Lines come from [The Odds API](https://the-odds-api.com) (free plan: 500 credits a month; each daily pull costs 2). The Edge Function `supabase/functions/vegas-lines/index.ts` runs every morning at 6 AM Pacific from the pg_cron job `handshake-vegas-lines`. It keeps the first line it saves for each game and never overwrites it.
+
+1. Run `update-vegas-lines.sql` (already in `schema.sql` for fresh installs).
+2. Under **Edge Functions → Secrets**, add `ODDS_API_KEY`.
+3. Create an Edge Function named exactly `vegas-lines`, paste in that file, turn **Verify JWT** off, and deploy. It won't pull more than once every 20 hours, so extra calls can't use up the credits.
+
 ## Good to know
 
 - **Sign-in emails have a low limit at first.** Supabase's built-in email sender only allows a few emails an hour, which is fine for testing. Before you invite a whole group, add your own email sender with the **Set up SMTP** button under **Authentication → Emails**. [Resend](https://resend.com) has a free plan that works well.

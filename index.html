@@ -137,6 +137,10 @@ td.pl{display:flex;gap:10px;align-items:center;min-width:140px}
 tr.me td{background:var(--pen-soft)}
 .you{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--pen);font-weight:600}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+.vday{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:6px 0 0}
+.vgame h3{margin:0;font-size:17px}
+.vrow{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.vpick{text-align:center}
 .card{background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:14px 16px;display:flex;flex-direction:column;gap:8px;min-width:0}
 .rname{display:flex;align-items:center;gap:10px}
 .av{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:600;font-size:13px;background:var(--pen-soft);color:var(--pen);flex:none}
@@ -358,6 +362,7 @@ a.btn.primary{color:var(--slip)}
         <button role="tab" id="tab-board" aria-selected="true" data-act="tab" data-v="board">Mine <span class="count" id="needCount" hidden></span></button>
         <button role="tab" id="tab-feed" aria-selected="false" data-act="tab" data-v="feed">Everyone <span class="count" id="crashCount" hidden></span></button>
         <button role="tab" id="tab-rivals" aria-selected="false" data-act="tab" data-v="rivals">Rivals</button>
+        <button role="tab" id="tab-vegas" aria-selected="false" data-act="tab" data-v="vegas">Vegas</button>
       </div>
       <button class="btn quiet" data-act="export">Export CSV</button>
     </nav>
