@@ -677,9 +677,11 @@ function message(b, kind) {
       break;
     default: subject = `Handshake: ${t}`; body = `${them}, reminder: ${t} for ${st}${due}. It's on Handshake:`;
   }
-  return { subject, body: body + " " + PAGE_URL, to: them };
+  return { subject, body: hs(body + " " + PAGE_URL), to: them };
 }
 const phoneKey = (n) => "hs-phone:" + n.toLowerCase();
+// Every message Handshake writes starts with the handshake emoji.
+const hs = (t) => (String(t).startsWith("🤝") ? t : "🤝 " + t);
 function smsHref(num, body) {
   const ios = /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
   return "sms:" + encodeURIComponent(num || "").replace(/%2B/g, "+") + (ios ? "&" : "?") + "body=" + encodeURIComponent(body);
@@ -857,9 +859,9 @@ function phoneForUid(uid) {
 function settleDoneBox() {
   const d = S.settleDone; if (!d) return "";
   const v = d.venmo ? ` Venmo: @${d.venmo} (venmo.com/u/${d.venmo}).` : "";
-  const text = d.kind === "settled"
+  const text = hs(d.kind === "settled"
     ? `Settled up on Handshake: the ${pts(d.points)} you owed me are cleared.${v}`
-    : `I just settled up the ${pts(d.points)} I owed you on Handshake. Confirm it in the app within 24 hours.${v}`;
+    : `I just settled up the ${pts(d.points)} I owed you on Handshake. Confirm it in the app within 24 hours.${v}`);
   const num = phoneForUid(d.uid) || store.get(phoneKey(d.name)) || "";
   const theirs = d.uid && S.rivalVenmo?.get(d.uid);
   const venmoBtn = d.kind === "settled"
@@ -1053,7 +1055,7 @@ function pkTotals(gid) {
 }
 function pkInviteText(g) {
   const code = S.pk.codes.get(g.id);
-  return `Join my Pick 'em All! group "${g.name}" on Handshake. Every week, pick every NFL game against the spread. The week's winner takes 5 pts from everyone else. Tap to join: ${PAGE_URL}?join=${code} (or enter code ${code} on the Everyone tab).`;
+  return hs(`Join my Pick 'em All! group "${g.name}" on Handshake. Every week, pick every NFL game against the spread. The week's winner takes 5 pts from everyone else. Tap to join: ${PAGE_URL}?join=${code} (or enter code ${code} on the Everyone tab).`);
 }
 function pkCard(g) {
   const mine = pkIsMember(g.id), rows = pkTotals(g.id);
@@ -1410,7 +1412,7 @@ function renderGolf() {
     <div class="pkjoin"><input id="wfCode" maxlength="7" placeholder="Round code" autocomplete="off" autocapitalize="characters" aria-label="Round code"><button class="btn" data-act="wfJoinCode">Join round</button></div></div>`;
 }
 function wfInviteText(r) {
-  return `Join my Wolf round${r.course ? " at " + r.course : ""} on Handshake so you can enter and follow scores live. Tap: ${PAGE_URL}?join=${r.code} (or enter code ${r.code} on the Golf tab).`;
+  return hs(`Join my Wolf round${r.course ? " at " + r.course : ""} on Handshake so you can enter and follow scores live. Tap: ${PAGE_URL}?join=${r.code} (or enter code ${r.code} on the Golf tab).`);
 }
 // Who pays whom, net of all offsets, in the fewest payments.
 function wfSettle(tot, names) {
@@ -1839,10 +1841,10 @@ function rvCalendar(e, lo) {
   return `<div class="rvcal"><span class="lab">Add to Calendar</span><div class="acts"><a class="btn primary" href="${esc(ics)}" target="_blank" rel="noopener">Apple / Outlook</a><a class="btn ghost" href="${esc(g)}" target="_blank" rel="noopener">Google Calendar</a></div></div>`;
 }
 function rvInviteText(e) {
-  return `${S.myName || "A friend"} invited you to "${e.title}" on Handshake. Pick the dates that work for you: sign up at ${PAGE_URL} with this phone number and it'll be waiting for you.`;
+  return hs(`${S.myName || "A friend"} invited you to "${e.title}" on Handshake. Pick the dates that work for you: sign up at ${PAGE_URL} with this phone number and it'll be waiting for you.`);
 }
 function rvLastCallText(e, lo) {
-  return `Last call: ${e.title}, ${lo ? optLabel(lo) : ""} at ${e.locked_venue}. Are you in? Sign up at ${PAGE_URL} with this phone number to confirm (or just text me back).`;
+  return hs(`Last call: ${e.title}, ${lo ? optLabel(lo) : ""} at ${e.locked_venue}. Are you in? Sign up at ${PAGE_URL} with this phone number to confirm (or just text me back).`);
 }
 function rvTextList(rows, text, title) {
   if (!rows.length) return "";
@@ -2473,9 +2475,9 @@ function groupMessage(g) {
   const due = g.due ? `, decided by ${niceDate(g.due)}` : "";
   const allOn = g.opps.every((o) => o.uid), someOn = g.opps.some((o) => o.uid);
   const until = g.shakeBy ? ` You have until ${deadlineText(g.shakeBy)}.` : "";
-  return `${listNames(g.opps.map((o) => o.name))}, I'm calling it: "${g.title}" for ${g.stake}${due}. That's me against each of you.${until} `
+  return hs(`${listNames(g.opps.map((o) => o.name))}, I'm calling it: "${g.title}" for ${g.stake}${due}. That's me against each of you.${until} `
     + (allOn ? `It's on Handshake: ${PAGE_URL}` : `Sign ${someOn ? "in or sign up" : "up"} on Handshake with your own phone number: ${PAGE_URL}`)
-    + ` I'll be waiting for you to shake on it.`;
+    + ` I'll be waiting for you to shake on it.`);
 }
 function groupInviteBox() {
   const g = S.groupInvite; if (!g) return "";
