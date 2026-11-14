@@ -101,7 +101,9 @@ The **Golf** tab tracks Wolf rounds for a foursome (Handshake people or guests).
 
 **Dump:** when the Wolf picks a partner, that player can dump the Wolf and go alone; they score exactly like a Lone Wolf against the other three (mode `dump`, partner = who dumped).
 
-Run `update-wolf.sql` through `update-wolf-5.sql` in order, and redeploy `notify`.
+**Deleting a finished match:** any player can ask; the others get a notification and any player can tap **Save this round** within 24 hours. Otherwise pg_cron job `handshake-wolf-delete` (every 10 minutes, `delete_expired_wolf_rounds()`) deletes it.
+
+Run `update-wolf.sql` through `update-wolf-6.sql` in order, and redeploy `notify`.
 
 ## Good to know
 

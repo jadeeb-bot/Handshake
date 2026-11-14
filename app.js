@@ -1282,7 +1282,7 @@ function renderGolf() {
     <div class="acts">${cl.guest_slots.map((i) => `<button class="btn primary" data-act="wfClaim" data-v="${i}">${esc(cl.names[i])}</button>`).join("")}<button class="btn ghost" data-act="wfClaimNo">Cancel</button></div>
     <span class="sub">You'll take that guest's spot and see the round live.</span></div>` : "";
   const rounds = S.wolf.rounds.map((r) => `<article class="card wfround" data-act="wfOpen" data-id="${r.id}">
-      <div class="slip-top"><span class="cat">Wolf</span><span class="sub">${esc(new Date(r.created_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }))} · ${r.status === "finished" ? "Match over" : "<b>In progress</b>"}</span></div>
+      <div class="slip-top"><span class="cat">Wolf</span><span class="sub">${esc(new Date(r.created_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }))} · ${r.delete_requested_at ? `<b class="neg">Deleting ${esc(lockLabel(Date.parse(r.delete_requested_at) + DAY))}</b>` : r.status === "finished" ? "Match over" : "<b>In progress</b>"}</span></div>
       <h3>${esc(r.course || "Wolf round")}</h3><span class="sub">${esc(wfNames(r).join(" · "))}</span></article>`).join("");
   return `<div style="display:flex;flex-direction:column;gap:14px">
     <div class="secthead"><h2>Golf</h2>${S.wolf.starting ? "" : `<button class="btn quiet" data-act="wfStart">Start a Wolf round</button>`}</div>
@@ -1369,7 +1369,17 @@ function renderWolfRound() {
       ? `${wfSettleHtml(tot, names, `If you end now (thru ${thru})`)}<div class="acts"><button class="btn primary" data-act="wfFinish">End match</button><button class="btn ghost" data-act="wfNo">Keep playing</button></div>`
       : `<div class="acts"><button class="btn" data-act="wfFinishAsk">End match</button>${r.created_by === S.me ? (S.wolf.confirm === "delete" ? `<button class="btn ghost" data-act="wfDelete">Tap again to delete this round</button>` : `<button class="btn quiet" data-act="wfDeleteAsk">Delete round</button>`) : ""}</div>
         <span class="sub">End the match any time, after 18 holes or fewer. Any player can do it. Only fully entered holes count.</span>`;
-  } else foot = `<div class="pksubmit done"><div class="pkdone">Match over</div><span>${thru} hole${thru === 1 ? "" : "s"} played. Here's who owes whom, net of everything:</span></div>${wfSettleHtml(tot, names, "Settle up")}`;
+  } else {
+    foot = `<div class="pksubmit done"><div class="pkdone">Match over</div><span>${thru} hole${thru === 1 ? "" : "s"} played. Here's who owes whom, net of everything:</span></div>${wfSettleHtml(tot, names, "Settle up")}`;
+    if (r.delete_requested_at) {
+      const when = Date.parse(r.delete_requested_at) + DAY, asker = r.players.find((p) => p.uid === r.delete_requested_by)?.name || "Someone";
+      foot += `<div class="wfdelete"><div><b>🗑 ${esc(r.delete_requested_by === S.me ? "You" : asker)} asked to delete this round.</b> It'll be deleted ${esc(lockLabel(when))} unless someone saves it.</div>
+        <button class="btn primary" data-act="wfKeep">${r.delete_requested_by === S.me ? "Cancel delete" : "Save this round"}</button></div>`;
+    } else if (S.wolf.confirm === "delreq") {
+      foot += `<div class="wfdelete"><div><b>Delete this round?</b> The other players get a notification, and any of them can save it within 24 hours. If nobody does, it's gone for good.</div>
+        <div class="acts"><button class="btn primary" data-act="wfDelReq">Ask to delete</button><button class="btn ghost" data-act="wfNo">Never mind</button></div></div>`;
+    } else foot += `<div class="acts"><button class="btn quiet" data-act="wfDelReqAsk">Delete round</button></div>`;
+  }
   const guests = r.players.filter((p) => !p.uid).map((p) => p.name);
   let invite = "";
   if (playing && r.code) {
@@ -1472,6 +1482,21 @@ async function wfReorderSave() {
   const { error } = await sb.rpc("reorder_wolf_round", { p_round: v.id, p_order: S.wolf.reorder });
   if (error) return toast(friendly(error));
   S.wolf.reorder = null; await loadWolf(); wfDraftFor(v.hole); render(); toast("Tee order saved.");
+}
+async function wfDelReq() {
+  const v = S.wolf.view;
+  const { data, error } = await sb.rpc("request_wolf_delete", { p_round: v.id });
+  if (error) return toast(friendly(error));
+  notifyQuiet({ wolf_round: v.id, wolf_delete: "requested" });
+  S.wolf.confirm = null; await loadWolf(); render();
+  toast("Asked to delete. It goes " + lockLabel(Date.parse(data)) + " unless someone saves it.");
+}
+async function wfKeep() {
+  const v = S.wolf.view, asker = wfRound(v.id)?.delete_requested_by;
+  const { error } = await sb.rpc("save_wolf_round", { p_round: v.id });
+  if (error) return toast(friendly(error));
+  if (asker && asker !== S.me) notifyQuiet({ wolf_round: v.id, wolf_delete: "saved", asker });
+  await loadWolf(); render(); toast(asker === S.me ? "Delete canceled." : "Round saved. It won't be deleted.");
 }
 async function wfFinish() {
   const { data, error } = await sb.rpc("finish_wolf_round", { p_round: S.wolf.view.id });
@@ -1580,6 +1605,9 @@ const ACT = {
   wfDeleteAsk: () => { S.wolf.confirm = "delete"; render(); },
   wfNo: () => { S.wolf.confirm = null; render(); },
   wfFinish: () => wfFinish(),
+  wfDelReqAsk: () => { S.wolf.confirm = "delreq"; render(); },
+  wfDelReq: () => wfDelReq(),
+  wfKeep: () => wfKeep(),
   wfDelete: () => wfDelete(),
   pkSubmit: () => pkSubmit(),
   pkBonus: (el) => pkBonus(el.dataset.id),

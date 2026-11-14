@@ -226,10 +226,36 @@ async function crashNote(admin: Admin, caller: string, body: { pickem_group?: st
 }
 
 /* ---------- Wolf: tell the other players a round started ---------- */
-async function wolfNote(admin: Admin, caller: string, body: { wolf_round?: string }) {
+async function wolfNote(admin: Admin, caller: string, body: { wolf_round?: string; wolf_delete?: string }) {
   if (!isId(body.wolf_round)) return reply(400, { error: "wolf_round is wrong." });
-  const { data: r } = await admin.from("wolf_rounds").select("course, players, created_by, created_at").eq("id", body.wolf_round).maybeSingle();
+  const { data: r } = await admin.from("wolf_rounds").select("course, players, created_by, created_at, delete_requested_by, delete_requested_at, delete_saved_by, delete_saved_at").eq("id", body.wolf_round).maybeSingle();
   if (!r) return reply(404, { error: "That round no longer exists." });
+  const all = (r.players || []) as { uid: string | null; name: string }[];
+  const nameOf = (u: string | null) => all.find((p) => p.uid === u)?.name || "Someone";
+  const where = r.course ? " at " + r.course : "";
+  // Someone asked to delete a finished match: tell the other players.
+  if (body.wolf_delete === "requested") {
+    if (r.delete_requested_by !== caller || !recent(r.delete_requested_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const to = all.map((p) => p.uid).filter((u): u is string => !!u && u !== caller);
+    const sent = await deliver(admin, to, {
+      title: "Delete this Wolf round?",
+      body: `${nameOf(caller)} asked to delete the Wolf round${where}. It'll be deleted in 24 hours unless someone opens it and taps Save this round.`,
+      tag: "wolf-delete-" + body.wolf_round,
+    });
+    return reply(200, { sent });
+  }
+  // Someone saved it: tell whoever asked to delete it.
+  if (body.wolf_delete === "saved") {
+    if (r.delete_saved_by !== caller || !recent(r.delete_saved_at) || !isId((body as { asker?: string }).asker)) return reply(200, { sent: 0, reason: "nothing new" });
+    const asker = String((body as { asker?: string }).asker);
+    if (asker === caller || !all.some((p) => p.uid === asker)) return reply(200, { sent: 0, reason: "nothing new" });
+    const sent = await deliver(admin, [asker], {
+      title: "Wolf round saved",
+      body: `${nameOf(caller)} saved the Wolf round${where}, so it won't be deleted.`,
+      tag: "wolf-delete-" + body.wolf_round,
+    });
+    return reply(200, { sent });
+  }
   if (r.created_by !== caller || !recent(r.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
   const players = (r.players || []) as { uid: string | null; name: string }[];
   const starter = players.find((p) => p.uid === caller)?.name || "Someone";
@@ -255,7 +281,7 @@ Deno.serve(async (req) => {
   const caller = who.user.id;
   console.log("notify: from", caller, "key type", SERVICE_KEY.startsWith("sb_secret_") ? "secret" : SERVICE_KEY.startsWith("eyJ") ? "legacy service_role" : "unknown");
 
-  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string } = {};
+  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
   if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
   if (body.pickem_group) return await crashNote(admin, caller, body);
