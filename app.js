@@ -681,7 +681,14 @@ function message(b, kind) {
 }
 const phoneKey = (n) => "hs-phone:" + n.toLowerCase();
 // Every message Handshake writes starts with the handshake emoji.
-const hs = (t) => (String(t).startsWith("🤝") ? t : "🤝 " + t);
+// Each sentence gets its own paragraph, and a trailing link goes on its own line (so Messages
+// shows the logo preview card).
+const hs = (t) => {
+  let x = String(t).replace(/^🤝\s*/, "").trim();
+  x = x.replace(/\s+(https?:\/\/\S+)$/, "\n\n$1");
+  x = x.replace(/([.!?])["”’)]?\s+(?=["“(]?[A-Z0-9@$🤝])/g, (m, p) => m.trimEnd() + "\n\n");
+  return "🤝 " + x;
+};
 function smsHref(num, body) {
   const ios = /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
   return "sms:" + encodeURIComponent(num || "").replace(/%2B/g, "+") + (ios ? "&" : "?") + "body=" + encodeURIComponent(body);
