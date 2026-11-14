@@ -3591,5 +3591,32 @@ revoke all on function public._venmo_clean(text) from public, anon;
 revoke all on function public.set_my_venmo(text), public.attach_settle_venmo(uuid, uuid, text), public.rival_venmos() from public, anon;
 grant execute on function public._venmo_clean(text), public.set_my_venmo(text), public.attach_settle_venmo(uuid, uuid, text), public.rival_venmos() to authenticated;
 
+-- ================================================================
+-- A loss recorded by the loser counts right away (same as update-concede.sql)
+-- ================================================================
+create or replace function public.report_result(p_id uuid, p_winner text)
+returns void language plpgsql security definer set search_path = public as $$
+declare r predictions := _load(p_id); s text := _side(r);
+begin
+  if s is null then raise exception 'Only the two players can record a result.'; end if;
+  if r.parent_id is not null then raise exception 'Crashes score themselves with the original.'; end if;
+  if r.status not in ('open', 'reported', 'disputed') then raise exception 'This one can''t take a result right now.'; end if;
+  if p_winner not in ('a', 'b', 'push', 'void') then raise exception 'Pick who called it.'; end if;
+  if p_winner in ('a', 'b') and p_winner <> s then
+    -- conceding: counts now
+    update predictions set status = 'settled', winner = p_winner, decided_at = now(),
+      report_winner = p_winner, report_by = s, dispute_by = null,
+      log = log || _entry('conceded: ' || case p_winner when 'a' then a_name else b_name end || ' won')
+    where id = p_id;
+    perform _resolve_crashes(p_id, p_winner);
+    return;
+  end if;
+  update predictions set status = 'reported', report_winner = p_winner, report_by = s,
+    dispute_by = now() + interval '24 hours',
+    log = log || _entry('recorded: ' || case p_winner when 'push' then 'tie' when 'void' then 'call it off'
+      when 'a' then a_name || ' won' else b_name || ' won' end)
+  where id = p_id;
+end $$;
+
 -- Tell the API to pick up the changes right away.
 notify pgrst, 'reload schema';

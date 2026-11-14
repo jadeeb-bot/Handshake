@@ -439,7 +439,7 @@ Deno.serve(async (req) => {
   if (p.referee_uid && caller === p.referee_uid) { recipients.add(p.a_uid); if (p.b_uid) recipients.add(p.b_uid); }
   else if (caller === p.a_uid) { if (p.b_uid ?? p.b_invited) recipients.add(p.b_uid ?? p.b_invited); }
   else recipients.add(p.a_uid);
-  if (/^(confirmed|agreed to call it off|withdrew|declined|accepted the proof|refereed)/.test(what) || p.status === "hopeless") {
+  if (/^(confirmed|conceded|agreed to call it off|withdrew|declined|accepted the proof|refereed)/.test(what) || p.status === "hopeless") {
     const { data: kids } = await admin.from("predictions").select("a_uid,b_uid").eq("parent_id", p.id);
     for (const k of kids ?? []) { if (k.a_uid) recipients.add(k.a_uid); if (k.b_uid) recipients.add(k.b_uid); }
   }
@@ -463,6 +463,7 @@ Deno.serve(async (req) => {
   else if (/^said prove it/.test(what)) text = `${by} says prove it. Post a photo or a video link within 24 hours, or ${by} wins.`;
   else if (/^posted proof/.test(what)) text = `${by} posted proof. You have 24 hours to accept it or say why it doesn't hold up. After that, it counts.`;
   else if (/^accepted the proof/.test(what)) text = `${by} accepted the proof. Done and done.`;
+  else if (/^conceded: /.test(what)) text = `${by} ${what}. Done and done.`;
   else if (objected) text = p.status === "referee"
     ? `${by} says your proof doesn't hold up. ${p.referee_name ?? "A referee"} is refereeing and has 24 hours to pick the winner.`
     : `${by} says your proof doesn't hold up, and there's no one to referee. It's Hopeless: no points move.`;

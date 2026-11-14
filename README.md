@@ -117,6 +117,10 @@ The **Contests** tab: a sponsor asks a question about the future, lists choices 
 
 The tabs are two rows (Mine · Everyone · Rivals, then Golf · RSVP · Contests · Vegas) with a **Quanto** button below: everyone you have an outstanding balance with (predictions, Pick 'em All! and Contests, after past settle-ups; golf excluded), with Settle up / I settled up on each. Every settle-up asks for an optional Venmo handle, which goes in the notification (`attach_settle_venmo()`); the first time, the app asks "Want me to remember your Venmo handle?" (`set_my_venmo()`, table `venmo_handles`, private). Remembered handles show on Quanto only to people who've played you (`rival_venmos()`). Quanto rows and the after-settle panel have **Request on Venmo** / **Pay on Venmo** buttons that open Venmo with the person (if their handle is saved) and a note filled in (Venmo's official payment link `venmo.com/<handle>?txn=charge|pay&note=...`; without a saved handle, `venmo://paycharge` on phones or venmo.com on a computer); the Shaker types the amount and taps Request/Pay. After any settle-up, a Let them know panel offers Copy / Open Messages with the Venmo handle in the text. Run `update-venmo.sql` and redeploy `notify`.
 
+## Conceding
+
+When a player records that the other side won, it's done and done right away (no 24-hour confirm); crashes on it settle too. Recording your own win, a tie, or call it off still waits 24 hours for the other side. Run `update-concede.sql` and redeploy `notify`.
+
 ## Good to know
 
 - **Sign-in emails have a low limit at first.** Supabase's built-in email sender only allows a few emails an hour, which is fine for testing. Before you invite a whole group, add your own email sender with the **Set up SMTP** button under **Authentication → Emails**. [Resend](https://resend.com) has a free plan that works well.

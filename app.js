@@ -531,7 +531,7 @@ function slip(b) {
       <button class="btn" data-act="report" data-w="push" data-id="${b.id}">Tie</button>
       <button class="btn" data-act="report" data-w="void" data-id="${b.id}">Call it off</button></div>
       ${siblings(b).length ? `<label class="check"><input type="checkbox" id="allSibs" checked><span>Record the same result against ${esc(listNames(siblings(b).map((x) => nameOf(x, other(side(x))))))} too</span></label>` : ""}
-      <span class="sub">${siblings(b).length ? "Each person" : them} confirms before any points move.</span>
+      <span class="sub">If you pick ${siblings(b).length ? "the other side" : them}, it's done and done right away. Otherwise ${siblings(b).length ? "each person" : them} gets 24 hours to confirm or say prove it before any points move.</span>
       <div><button class="btn quiet" data-act="unpick">Cancel</button></div></div>`;
   }
   const cls = "slip" + (needsMe(b) || canSign(b) ? " attn" : "") + (stamp ? " has-stamp" : "") + (S.fresh === b.id ? " newly" : "");
@@ -2201,7 +2201,8 @@ const ACT = {
   report: async (el) => {
     const b = byId(el.dataset.id), w = el.dataset.w, s = side(b);
     const sibs = $("#allSibs")?.checked ? siblings(b) : [];
-    const ok = await call("report_result", { p_id: b.id, p_winner: w }, sibs.length ? null : "Result sent for confirmation", b.id);
+    const concede = (w === "a" || w === "b") && w !== s;
+    const ok = await call("report_result", { p_id: b.id, p_winner: w }, sibs.length ? null : concede ? `Done and done. ${nameOf(b, w)} wins.` : "Result sent for confirmation", b.id);
     if (!ok || !sibs.length) return;
     let done = 0;
     for (const x of sibs) {
@@ -2211,7 +2212,7 @@ const ACT = {
       if (!error) { done++; announce(x.id); }
     }
     await loadBets(); render();
-    toast("Result sent to " + (done + 1) + " people for confirmation" + (done < sibs.length ? ". Some couldn't be updated; check those slips." : "."));
+    toast((concede ? "Done and done with " + (done + 1) + " people" : "Result sent to " + (done + 1) + " people for confirmation") + (done < sibs.length ? ". Some couldn't be updated; check those slips." : "."));
   },
   confirm: (el) => {
     const b = byId(el.dataset.id), w = b?.report?.winner;
