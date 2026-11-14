@@ -105,6 +105,14 @@ The **Golf** tab tracks Wolf rounds for a foursome (Handshake people or guests).
 
 Run `update-wolf.sql` through `update-wolf-6.sql` in order, and redeploy `notify`.
 
+## RSVP
+
+The **RSVP** tab plans anything (dinner, a trip). The organizer names it, sets a place or asks for ideas, proposes dates (day, optional time, optional end day) and invites people. Everyone marks Go / No-go on each date, can suggest more dates and places, and votes for places. A date "still works" until someone says No-go; what still works is ranked by Go votes, places by votes. Everyone is notified when the list of workable dates shrinks. **Lock it down** (organizer) picks the date and place and sends a **last call** to a list the organizer reviews (default: everyone who said Go to that date or hasn't answered it). Run `update-rsvp.sql`.
+
+## Contests
+
+The **Contests** tab: a sponsor asks a question about the future, lists choices (optionally allowing write-ins), sets points per entry, entries per person, an entry deadline, invitees and crashers (Full Monty / Circle of Trust / invited only). Winning entries split the pot (each losing entry's points spread across the winning entries); nobody right = refunds. The sponsor records the result; entrants get 24 hours to say Prove it!, then proof (a link), challenge and a referee, like regular predictions. Points are booked as finished predictions (marked `contest_id`). pg_cron job `handshake-contests` handles the 24-hour clocks. Run `update-contests.sql`.
+
 ## Good to know
 
 - **Sign-in emails have a low limit at first.** Supabase's built-in email sender only allows a few emails an hour, which is fine for testing. Before you invite a whole group, add your own email sender with the **Set up SMTP** button under **Authentication → Emails**. [Resend](https://resend.com) has a free plan that works well.

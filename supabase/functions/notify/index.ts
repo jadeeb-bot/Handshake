@@ -268,6 +268,108 @@ async function wolfNote(admin: Admin, caller: string, body: { wolf_round?: strin
   return reply(200, { sent });
 }
 
+/* ---------- RSVP ---------- */
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function optLabel(o: { day: string; end_day?: string | null; at_time?: string | null }) {
+  const d = (x: string) => { const t = new Date(x + "T12:00:00Z"); return `${DOW[t.getUTCDay()]} ${MON[t.getUTCMonth()]} ${t.getUTCDate()}`; };
+  let s = d(o.day) + (o.end_day && o.end_day !== o.day ? "–" + d(o.end_day) : "");
+  if (o.at_time) { const [h, m] = o.at_time.split(":").map(Number); s += ` ${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; }
+  return s;
+}
+async function rsvpNote(admin: Admin, caller: string, body: { rsvp_event?: string; kind?: string }) {
+  if (!isId(body.rsvp_event)) return reply(400, { error: "rsvp_event is wrong." });
+  const id = body.rsvp_event;
+  const { data: e } = await admin.from("rsvp_events").select("*").eq("id", id).maybeSingle();
+  if (!e) return reply(404, { error: "That event no longer exists." });
+  const inv = ((await admin.from("rsvp_invitees").select("uid").eq("event_id", id)).data || []).map((x: { uid: string }) => x.uid);
+  const members = [e.organizer, ...inv] as string[];
+  if (!members.includes(caller) && body.kind !== "lastcall") return reply(403, { error: "Not part of this event." });
+  const nameOf = async (u: string) => ((await admin.from("profiles").select("name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
+  const tag = "rsvp-" + id;
+  if (body.kind === "invite") {
+    if (caller !== e.organizer || !recent(e.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const sent = await deliver(admin, inv, { title: "RSVP: " + e.title,
+      body: `${await nameOf(caller)} is planning ${e.title}${e.venue ? " at " + e.venue : ""}. Mark which dates work for you${e.venue ? "" : " and suggest a place"}.`, tag });
+    return reply(200, { sent });
+  }
+  if (body.kind === "answer" && e.status === "open") {
+    const { data: tally } = await admin.rpc("rsvp_tally", { p_event: id });
+    const works = (tally || []).filter((t: { works: boolean }) => t.works);
+    if (e.open_count != null && works.length >= e.open_count) return reply(200, { sent: 0, reason: "not narrower" });
+    await admin.from("rsvp_events").update({ open_count: works.length }).eq("id", id);
+    const { data: vs } = await admin.from("rsvp_venue_votes").select("venue_id").eq("event_id", id);
+    let top = "";
+    if (vs?.length) {
+      const c = new Map<string, number>(); for (const v of vs) c.set(v.venue_id, (c.get(v.venue_id) || 0) + 1);
+      const best = [...c.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      top = ((await admin.from("rsvp_venues").select("name").eq("id", best).maybeSingle()).data?.name as string) || "";
+    }
+    const list = works.slice(0, 3).map(optLabel).join(", ");
+    const msg = works.length
+      ? `${works.length} option${works.length === 1 ? "" : "s"} still work${works.length === 1 ? "s" : ""}: ${list}${works.length > 3 ? "…" : ""}.${top ? " Top venue: " + top + "." : ""}`
+      : "No date works for everyone anymore. Open it to suggest another one.";
+    const sent = await deliver(admin, members.filter((u) => u !== caller), { title: e.title + ": narrowing down", body: msg, tag });
+    return reply(200, { sent });
+  }
+  if (body.kind === "venue") {
+    if (caller === e.organizer) return reply(200, { sent: 0 });
+    const sent = await deliver(admin, [e.organizer], { title: e.title + ": new place", body: `${await nameOf(caller)} suggested a place. Open it to see the ideas and votes.`, tag });
+    return reply(200, { sent });
+  }
+  if (body.kind === "lock") {
+    if (caller !== e.organizer || e.status !== "locked" || !recent(e.locked_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const { data: o } = await admin.from("rsvp_options").select("day, end_day, at_time").eq("id", e.locked_option).maybeSingle();
+    const to = ((await admin.from("rsvp_lastcall").select("uid").eq("event_id", id)).data || []).map((x: { uid: string }) => x.uid);
+    const sent = await deliver(admin, to, { title: "Last call: " + e.title,
+      body: `Locked: ${o ? optLabel(o) : ""} at ${e.locked_venue}. Are you in? Open it to confirm.`, tag });
+    return reply(200, { sent });
+  }
+  if (body.kind === "lastcall") {
+    const { data: lc } = await admin.from("rsvp_lastcall").select("status, answered_at").eq("event_id", id).eq("uid", caller).maybeSingle();
+    if (!lc || lc.status === "pending" || !recent(lc.answered_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const sent = await deliver(admin, [e.organizer], { title: e.title,
+      body: `${await nameOf(caller)} ${lc.status === "in" ? "is in" : "can't make it"}.`, tag });
+    return reply(200, { sent });
+  }
+  return reply(200, { sent: 0, reason: "nothing new" });
+}
+
+/* ---------- Contests ---------- */
+async function contestNote(admin: Admin, caller: string, body: { contest_id?: string; kind?: string }) {
+  if (!isId(body.contest_id)) return reply(400, { error: "contest_id is wrong." });
+  const id = body.contest_id;
+  const { data: c } = await admin.from("contests").select("*").eq("id", id).maybeSingle();
+  if (!c) return reply(404, { error: "That contest no longer exists." });
+  const nameOf = async (u: string) => ((await admin.from("profiles").select("name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
+  const entrants = [...new Set(((await admin.from("contest_entries").select("uid").eq("contest_id", id)).data || []).map((x: { uid: string }) => x.uid))] as string[];
+  const tag = "contest-" + id;
+  if (body.kind === "new") {
+    if (caller !== c.sponsor || !recent(c.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const inv = ((await admin.from("contest_invitees").select("uid").eq("contest_id", id)).data || []).map((x: { uid: string }) => x.uid);
+    const sent = await deliver(admin, inv, { title: "Contest: " + c.title,
+      body: `${await nameOf(caller)} started a contest: ${c.points} pts an entry, up to ${c.max_entries}. Open the Contests tab to enter.`, tag });
+    return reply(200, { sent });
+  }
+  if (!recent(c.stage_at)) return reply(200, { sent: 0, reason: "nothing new" });
+  let to: string[] = [], title = c.title, msg = "";
+  if (c.stage === "recorded" && caller === c.sponsor) {
+    to = entrants.filter((u) => u !== c.sponsor);
+    msg = `Result: ${c.result}. You have 24 hours to say Prove it! After that, it counts.`;
+  } else if (c.stage === "proving" && caller === c.objector) {
+    to = [c.sponsor]; msg = `${await nameOf(caller)} says prove it. Post a link within 24 hours or it's called off.`;
+  } else if (c.stage === "proof" && caller === c.sponsor) {
+    to = [c.objector]; msg = "Proof posted. You have 24 hours to accept it or say why it doesn't hold up. After that, it counts.";
+  } else if (c.stage === "refereeing" && caller === c.objector) {
+    to = [c.referee]; title = "You're the referee"; msg = `For the contest "${c.title}": decide within 24 hours whether the result stands.`;
+  } else if ((c.stage === "settled" || c.stage === "void") && [c.sponsor, c.objector, c.referee].includes(caller)) {
+    to = [...new Set([c.sponsor, ...entrants])].filter((u) => u !== caller);
+    msg = c.stage === "settled" ? `Done and done: ${c.result}. Points are in.` : (c.outcome_note || "Called off. Everyone's refunded.");
+  } else return reply(200, { sent: 0, reason: "nothing new" });
+  const sent = await deliver(admin, to.filter(Boolean), { title, body: msg, tag });
+  return reply(200, { sent });
+}
+
 /* ---------- the request ---------- */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -281,11 +383,13 @@ Deno.serve(async (req) => {
   const caller = who.user.id;
   console.log("notify: from", caller, "key type", SERVICE_KEY.startsWith("sb_secret_") ? "secret" : SERVICE_KEY.startsWith("eyJ") ? "legacy service_role" : "unknown");
 
-  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string } = {};
+  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string; rsvp_event?: string; contest_id?: string; kind?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
   if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
   if (body.pickem_group) return await crashNote(admin, caller, body);
   if (body.wolf_round) return await wolfNote(admin, caller, body);
+  if (body.rsvp_event) return await rsvpNote(admin, caller, body);
+  if (body.contest_id) return await contestNote(admin, caller, body);
   const predictionId = String(body.prediction_id ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(predictionId)) return reply(400, { error: "prediction_id is required." });
 

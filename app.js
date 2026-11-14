@@ -70,7 +70,7 @@ function fromRow(r) {
     objection: r.objection || "", referee: r.referee_uid || r.referee_name ? { uid: r.referee_uid, name: r.referee_name || "the referee" } : null,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
     counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
-    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null, pickem: r.pickem_group || null, wolf: r.wolf_round || null,
+    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null, pickem: r.pickem_group || null, wolf: r.wolf_round || null, contest: r.contest_id || null,
     createdAt: Date.parse(r.created_at), decidedAt: r.decided_at ? Date.parse(r.decided_at) : null, log: r.log || [],
   };
 }
@@ -765,7 +765,7 @@ function crashPanel(b) {
 }
 const FEED_FILTERS = [["crash", "Open to crash"], ["live", "In play"], ["all", "Everything"]];
 function renderFeed() {
-  const bets = S.bets.filter((b) => !b.pickem && !b.wolf);
+  const bets = S.bets.filter((b) => !b.pickem && !b.wolf && !b.contest);
   if (!bets.length) return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div></div>`;
   const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
   const list = bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -1510,12 +1510,336 @@ async function wfDelete() {
   S.wolf.view = null; S.wolf.confirm = null; await loadWolf(); render(); toast("Round deleted.");
 }
 
+/* ---------- live updates helper (RSVP, Contests) ---------- */
+const liveChans = {};
+function liveSub(key, specs, cb) {
+  liveUnsub(key);
+  try {
+    let ch = sb.channel(key);
+    for (const [table, filter] of specs) ch = ch.on("postgres_changes", { event: "*", schema: "public", table, filter }, () => { clearTimeout(ch._t); ch._t = setTimeout(cb, 250); });
+    liveChans[key] = ch.subscribe();
+  } catch (e) {}
+}
+function liveUnsub(key) { if (liveChans[key]) { try { sb.removeChannel(liveChans[key]); } catch (e) {} delete liveChans[key]; } }
+const DOW3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function optLabel(o) {
+  const d = (x) => { const t = new Date(x + "T12:00:00Z"); return `${DOW3[t.getUTCDay()]} ${MON3[t.getUTCMonth()]} ${t.getUTCDate()}`; };
+  let s = d(o.day) + (o.end_day && o.end_day !== o.day ? "–" + d(o.end_day) : "");
+  if (o.at_time) { const [h, m] = o.at_time.split(":").map(Number); s += ` ${(h % 12) || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; }
+  return s;
+}
+const checked = (sel) => [...document.querySelectorAll(sel)].filter((x) => x.checked).map((x) => x.value);
+
+/* ---------- RSVP ---------- */
+async function loadRsvp() {
+  const { data, error } = await sb.from("rsvp_events").select("*").order("created_at", { ascending: false }).limit(30);
+  if (error) { S.rsvp = { ...(S.rsvp || {}), off: true, events: [] }; return; }
+  const ids = (data || []).map((e) => e.id);
+  const [o, lc] = await Promise.all([
+    ids.length ? sb.from("rsvp_options").select("*").in("event_id", ids) : { data: [] },
+    ids.length ? sb.from("rsvp_lastcall").select("*").in("event_id", ids) : { data: [] },
+  ]);
+  S.rsvp = { ...(S.rsvp || {}), off: false, events: data || [], options: o.data || [], lastcall: lc.data || [] };
+}
+async function loadRsvpEvent() {
+  const v = S.rsvp?.view; if (!v) return;
+  const id = v.id;
+  const [e, inv, o, a, vn, vv, lc] = await Promise.all([
+    sb.from("rsvp_events").select("*").eq("id", id).maybeSingle(),
+    sb.from("rsvp_invitees").select("*").eq("event_id", id),
+    sb.from("rsvp_options").select("*").eq("event_id", id),
+    sb.from("rsvp_answers").select("*").eq("event_id", id),
+    sb.from("rsvp_venues").select("*").eq("event_id", id),
+    sb.from("rsvp_venue_votes").select("*").eq("event_id", id),
+    sb.from("rsvp_lastcall").select("*").eq("event_id", id),
+  ]);
+  if (e.error || !e.data) { v.err = e.error ? friendly(e.error) : "That event is gone."; render(); return; }
+  Object.assign(v, { e: e.data, inv: (inv.data || []).map((x) => x.uid), opts: o.data || [], ans: a.data || [], venues: vn.data || [], votes: vv.data || [], lc: lc.data || [], err: "" });
+  render();
+}
+function rsvpTally(v) {
+  return v.opts.map((o) => {
+    const as = v.ans.filter((a) => a.option_id === o.id);
+    const go = as.filter((a) => a.answer === "go").map((a) => a.uid), nogo = as.filter((a) => a.answer === "nogo").map((a) => a.uid);
+    return { ...o, go, nogo, works: !nogo.length, mine: as.find((a) => a.uid === S.me)?.answer || null };
+  }).sort((a, b) => (b.works - a.works) || (b.go.length - a.go.length) || a.day.localeCompare(b.day) || String(a.at_time || "").localeCompare(String(b.at_time || "")));
+}
+function rsvpVenues(v) {
+  const rows = v.venues.map((x) => ({ ...x, voters: v.votes.filter((y) => y.venue_id === x.id).map((y) => y.uid) }));
+  return rows.sort((a, b) => b.voters.length - a.voters.length || a.name.localeCompare(b.name));
+}
+function renderRsvp() {
+  if (!S.rsvp) { loadRsvp().then(render).catch(() => {}); return `<div class="empty"><p>Loading…</p></div>`; }
+  if (S.rsvp.off) return `<div class="empty"><h3>RSVP isn't switched on yet</h3><p>Run update-rsvp.sql in Supabase.</p></div>`;
+  if (S.rsvp.view) return renderRsvpEvent();
+  let form = "";
+  if (S.rsvp.form) {
+    const f = S.rsvp.form;
+    form = `<div class="card wfstart">
+      <div class="field"><label for="rvTitle">What's the plan?</label><input id="rvTitle" maxlength="60" placeholder="Dinner, Vegas trip, poker night…" value="${esc(f.title)}" autocomplete="off"></div>
+      <span class="lab">Where</span>
+      <div class="rvradio"><label><input type="radio" name="rvWhere" value="set" ${f.where === "set" ? "checked" : ""}> I know the place</label><label><input type="radio" name="rvWhere" value="ideas" ${f.where === "ideas" ? "checked" : ""}> Ask for ideas</label></div>
+      <input id="rvVenue" maxlength="60" placeholder="Venue" value="${esc(f.venue)}" ${f.where === "set" ? "" : "hidden"} autocomplete="off">
+      <span class="lab">Dates that work for you</span><span class="sub">Add each option. Time and end date are optional (use an end date for trips).</span>
+      <div class="rvopt rvlabels"><span>Day</span><span>Time (optional)</span><span>Through (trips)</span><span></span></div>
+      ${f.opts.map((o, i) => `<div class="rvopt"><input type="date" id="rvD${i}" value="${esc(o.day)}" aria-label="Day"><input type="time" id="rvT${i}" value="${esc(o.time)}" aria-label="Time"><input type="date" id="rvE${i}" value="${esc(o.end)}" aria-label="Through"><button class="btn quiet" data-act="rvDelOpt" data-v="${i}" aria-label="Remove">✕</button></div>`).join("")}
+      <button class="btn ghost" data-act="rvAddOpt">+ Another date</button>
+      <span class="lab">Invite</span>
+      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="rvInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>
+      <div class="field"><label for="rvNotes">Notes (optional)</label><input id="rvNotes" maxlength="240" value="${esc(f.notes)}" autocomplete="off"></div>
+      <p class="err" id="rvErr" hidden></p>
+      <div class="acts"><button class="btn primary" data-act="rvCreate">Send invites</button><button class="btn ghost" data-act="rvCancelForm">Cancel</button></div></div>`;
+  }
+  const cards = S.rsvp.events.map((e) => {
+    const lo = e.locked_option && S.rsvp.options.find((o) => o.id === e.locked_option);
+    const myLc = S.rsvp.lastcall.find((x) => x.event_id === e.id && x.uid === S.me);
+    const st = e.status === "canceled" ? "Canceled" : e.status === "locked" ? `<b>Locked:</b> ${esc(lo ? optLabel(lo) : "")} at ${esc(e.locked_venue)}${myLc?.status === "pending" ? ` · <b class="neg">Are you in?</b>` : ""}`
+      : `<b>Planning</b> · ${S.rsvp.options.filter((o) => o.event_id === e.id).length} date options`;
+    return `<article class="card wfround" data-act="rvOpen" data-id="${e.id}"><div class="slip-top"><span class="cat">RSVP</span><span class="sub">${e.organizer === S.me ? "You're organizing" : "From " + esc(personName(e.organizer) || "a friend")}</span></div>
+      <h3>${esc(e.title)}</h3><span class="sub">${st}</span></article>`;
+  }).join("");
+  return `<div style="display:flex;flex-direction:column;gap:14px">
+    <div class="secthead"><h2>RSVP</h2>${S.rsvp.form ? "" : `<button class="btn quiet" data-act="rvNew">Plan something</button>`}</div>
+    <span class="sub">Dinner, a trip, anything. Propose dates and a place (or ask for ideas); everyone marks Go or No-go and Handshake narrows it down. Lock it down when you're ready and send a last call.</span>
+    ${form}${cards ? `<div class="cards">${cards}</div>` : S.rsvp.form ? "" : `<div class="empty"><p>Nothing planned yet.</p></div>`}</div>`;
+}
+function renderRsvpEvent() {
+  const v = S.rsvp.view, head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="rvBack">‹ All plans</button></div>`;
+  if (!v.e) return `<div style="display:flex;flex-direction:column;gap:14px">${head("RSVP")}<div class="empty"><p>${esc(v.err || "Loading…")}</p></div></div>`;
+  const e = v.e, org = e.organizer === S.me, open = e.status === "open", members = [e.organizer, ...v.inv];
+  const nm = (u) => (u === S.me ? "You" : personName(u) || "Someone");
+  const tally = rsvpTally(v), venues = rsvpVenues(v), works = tally.filter((t) => t.works);
+  const replied = members.filter((u) => v.ans.some((a) => a.uid === u));
+  let out = `<div class="sub">${org ? "You're organizing" : "Organized by " + esc(nm(e.organizer))} · ${e.venue ? "Place: <b>" + esc(e.venue) + "</b>" : "Place: open to ideas"}${e.notes ? "<br>" + esc(e.notes) : ""}</div>`;
+  if (e.status === "canceled") out += `<div class="wfdelete"><b>Canceled by the organizer.</b></div>`;
+  if (e.status === "locked") {
+    const lo = v.opts.find((o) => o.id === e.locked_option), my = v.lc.find((x) => x.uid === S.me);
+    out += `<div class="pksubmit done"><div class="pkdone">Locked down</div><span><b>${esc(lo ? optLabel(lo) : "")}</b> at <b>${esc(e.locked_venue)}</b></span></div>`;
+    if (my) out += `<div class="acts"><button class="btn ${my.status === "in" ? "primary" : "ghost"}" data-act="rvLc" data-v="1">I'm in</button><button class="btn ${my.status === "out" ? "primary" : "ghost"}" data-act="rvLc" data-v="0">Can't make it</button></div>`;
+    out += `<div class="table"><table><thead><tr><th>Last call</th><th class="num">Answer</th></tr></thead><tbody>
+      <tr><td>${esc(nm(e.organizer))} <span class="sub">organizer</span></td><td class="num pos">In</td></tr>
+      ${v.lc.map((x) => `<tr class="${x.uid === S.me ? "me" : ""}"><td>${esc(nm(x.uid))}</td><td class="num ${x.status === "in" ? "pos" : x.status === "out" ? "neg" : ""}">${x.status === "in" ? "In" : x.status === "out" ? "Out" : "Waiting"}</td></tr>`).join("")}</tbody></table></div>`;
+    return `<div style="display:flex;flex-direction:column;gap:14px">${head(e.title)}${out}</div>`;
+  }
+  // when
+  out += `<div class="wfstakes"><span><b>${works.length}</b> of ${tally.length} date${tally.length === 1 ? "" : "s"} still work</span><span><b>${replied.length}</b> of ${members.length} replied</span></div>`;
+  out += `<span class="lab">When</span>` + tally.map((t) => `<div class="card rvrow ${t.works ? "" : "out"}">
+      <div class="rvhead"><b>${esc(optLabel(t))}</b><span class="sub">${t.works ? "" : "✗ out · "}✓ ${t.go.length} · ✗ ${t.nogo.length} · ? ${members.length - t.go.length - t.nogo.length}</span></div>
+      ${t.go.length || t.nogo.length ? `<span class="sub">${t.go.length ? "Go: " + esc(t.go.map(nm).join(", ")) : ""}${t.go.length && t.nogo.length ? " · " : ""}${t.nogo.length ? "No-go: " + esc(t.nogo.map(nm).join(", ")) : ""}</span>` : ""}
+      ${open ? `<div class="vrow"><button class="btn ghost vpick ${t.mine === "go" ? "on" : ""}" data-act="rvAns" data-id="${t.id}" data-v="go">Go</button><button class="btn ghost vpick ${t.mine === "nogo" ? "on" : ""}" data-act="rvAns" data-id="${t.id}" data-v="nogo">No-go</button></div>` : ""}</div>`).join("");
+  if (open) out += `<div class="rvopt rvlabels"><span>Day</span><span>Time (optional)</span><span>Through (trips)</span><span></span></div><div class="rvopt"><input type="date" id="rvNewD" aria-label="Day"><input type="time" id="rvNewT" aria-label="Time"><input type="date" id="rvNewE" aria-label="Through"><button class="btn ghost" data-act="rvSuggestDate">Suggest</button></div><span class="sub">Suggest another date (time and end date optional). You'll be marked Go on it.</span>`;
+  // where
+  out += `<span class="lab">${e.venue ? "Other places" : "Place ideas"}</span>`;
+  out += venues.length ? venues.map((x) => `<div class="rvvenue"><span><b>${esc(x.name)}</b> <span class="sub">${esc(nm(x.suggested_by))}</span></span>
+      ${open ? `<button class="chipbtn" aria-pressed="${x.voters.includes(S.me)}" data-act="rvVote" data-id="${x.id}">👍 ${x.voters.length}</button>` : `<span class="sub">👍 ${x.voters.length}</span>`}</div>`).join("") : `<span class="sub">${e.venue ? "Nobody's suggested anywhere else." : "No ideas yet."}</span>`;
+  if (open) out += `<div class="pkjoin"><input id="rvNewVenue" maxlength="60" placeholder="${e.venue ? "Suggest a different place" : "Suggest a place"}" autocomplete="off"><button class="btn" data-act="rvSuggestVenue">Suggest</button></div>`;
+  // who
+  out += `<span class="lab">Who</span><div class="sub">${members.map((u) => esc(nm(u)) + (replied.includes(u) ? " ✓" : " (no reply yet)")).join(" · ")}</div>`;
+  // lock it down
+  if (org && open) {
+    const L = S.rsvp.lock;
+    if (!L) out += `<div class="acts"><button class="btn primary" data-act="rvLockAsk">Lock it down</button><button class="btn quiet" data-act="rvCancelEvent">Cancel event</button></div>`;
+    else {
+      const venueChoices = [...(e.venue ? [e.venue] : []), ...venues.map((x) => x.name).filter((n) => n !== e.venue)];
+      const extra = S.people.filter((p) => p.id !== S.me && !L.people.includes(p.id));
+      out += `<div class="card wfstart"><span class="lab">Lock it down</span>
+        <span class="sub">Pick the date</span>${tally.map((t) => `<label class="rvpick"><input type="radio" name="rvLockOpt" value="${t.id}" ${L.opt === t.id ? "checked" : ""}> ${esc(optLabel(t))} <span class="sub">✓ ${t.go.length} ✗ ${t.nogo.length}</span></label>`).join("")}
+        <span class="sub">Pick the place</span>${venueChoices.map((n) => `<label class="rvpick"><input type="radio" name="rvLockVenue" value="${esc(n)}" ${L.venue === n ? "checked" : ""}> ${esc(n)}</label>`).join("")}
+        <label class="rvpick"><input type="radio" name="rvLockVenue" value="__other" ${L.venue === "__other" ? "checked" : ""}> Somewhere else: <input id="rvLockOther" maxlength="60" value="${esc(L.other || "")}" autocomplete="off"></label>
+        <span class="sub">Last call goes to (people who said Go to that date or haven't answered it; change it however you like)</span>
+        <div class="rvpeople">${L.people.map((u) => `<label><input type="checkbox" class="rvLc" value="${u}" ${L.on.includes(u) ? "checked" : ""}> ${esc(nm(u))}${members.includes(u) ? "" : " (added)"}</label>`).join("") || `<span class="sub">Nobody yet.</span>`}</div>
+        ${extra.length ? `<div class="pkjoin"><select id="rvAddPerson"><option value="">Add someone…</option>${extra.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select><button class="btn" data-act="rvAddPerson">Add</button></div>` : ""}
+        <div class="acts"><button class="btn primary" data-act="rvLock">Send last call</button><button class="btn ghost" data-act="rvLockNo">Not yet</button></div></div>`;
+    }
+  }
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head(e.title)}${out}</div>`;
+}
+function rvFormCapture() {
+  const f = S.rsvp?.form; if (!f || !$("#rvTitle")) return;
+  f.title = $("#rvTitle").value; f.venue = $("#rvVenue").value; f.notes = $("#rvNotes").value;
+  f.where = document.querySelector('input[name="rvWhere"]:checked')?.value || "set";
+  f.opts = f.opts.map((o, i) => ({ day: $("#rvD" + i)?.value || "", time: $("#rvT" + i)?.value || "", end: $("#rvE" + i)?.value || "" }));
+  f.inv = checked(".rvInv");
+}
+function rvLockDefaults(optId) {
+  const v = S.rsvp.view, members = [v.e.organizer, ...v.inv].filter((u) => u !== v.e.organizer);
+  const on = members.filter((u) => { const a = v.ans.find((x) => x.option_id === optId && x.uid === u); return !a || a.answer === "go"; });
+  return { people: members, on };
+}
+function rvLockCapture() {
+  const L = S.rsvp?.lock; if (!L || !document.querySelector('input[name="rvLockOpt"]')) return;
+  L.opt = document.querySelector('input[name="rvLockOpt"]:checked')?.value || L.opt;
+  L.venue = document.querySelector('input[name="rvLockVenue"]:checked')?.value || L.venue;
+  L.other = $("#rvLockOther")?.value || "";
+  L.on = checked(".rvLc");
+}
+function rvOpen(id) {
+  S.rsvp.view = { id }; S.rsvp.lock = null; render(); loadRsvpEvent();
+  liveSub("rsvp", [["rsvp_answers", "event_id=eq." + id], ["rsvp_events", "id=eq." + id], ["rsvp_venue_votes", "event_id=eq." + id], ["rsvp_lastcall", "event_id=eq." + id]], () => { if (S.tab === "rsvp" && S.rsvp?.view?.id === id) loadRsvpEvent(); });
+}
+async function rvCreate() {
+  rvFormCapture();
+  const f = S.rsvp.form, err = (m) => { const x = $("#rvErr"); if (x) { x.textContent = m; x.hidden = false; } };
+  if (!f.title.trim()) return err("Say what the plan is.");
+  const opts = f.opts.filter((o) => o.day).map((o) => ({ day: o.day, at_time: o.time || null, end_day: o.end || null }));
+  if (!opts.length) return err("Add at least one date.");
+  if (!f.inv.length) return err("Invite at least one person.");
+  const { data, error } = await sb.rpc("create_rsvp", { p_title: f.title.trim(), p_venue: f.where === "set" ? f.venue.trim() : null, p_notes: f.notes.trim(), p_options: opts, p_invitees: f.inv });
+  if (error) return err(friendly(error));
+  notifyQuiet({ rsvp_event: data, kind: "invite" });
+  S.rsvp.form = null; await loadRsvp(); rvOpen(data); toast("Invites sent.");
+}
+async function rvAct(fn, args, note, kind) {
+  const { error } = await sb.rpc(fn, args);
+  if (error) return toast(friendly(error));
+  if (kind) notifyQuiet({ rsvp_event: S.rsvp.view.id, kind });
+  if (note) toast(note);
+  await loadRsvpEvent();
+}
+async function rvLock() {
+  rvLockCapture();
+  const L = S.rsvp.lock, venue = L.venue === "__other" ? (L.other || "").trim() : L.venue;
+  if (!L.opt) return toast("Pick the date.");
+  if (!venue) return toast("Pick the place.");
+  const { data, error } = await sb.rpc("rsvp_lock", { p_event: S.rsvp.view.id, p_option: L.opt, p_venue: venue, p_people: L.on });
+  if (error) return toast(friendly(error));
+  notifyQuiet({ rsvp_event: S.rsvp.view.id, kind: "lock" });
+  S.rsvp.lock = null; toast(`Locked down. Last call sent to ${data} ${data === 1 ? "person" : "people"}.`);
+  await Promise.all([loadRsvp(), loadRsvpEvent()]);
+}
+
+/* ---------- Contests ---------- */
+const CT_VIS = { all: "Full Monty (anyone can crash)", circle: "Circle of Trust (people we've played can crash)", invited: "Just the invited (no crashers)" };
+async function loadContests() {
+  const { data, error } = await sb.from("contests").select("*").order("created_at", { ascending: false }).limit(40);
+  if (error) { S.ct = { ...(S.ct || {}), off: true, list: [] }; return; }
+  const ids = (data || []).map((c) => c.id);
+  const [en, inv] = await Promise.all([
+    ids.length ? sb.from("contest_entries").select("*").in("contest_id", ids) : { data: [] },
+    ids.length ? sb.from("contest_invitees").select("*").in("contest_id", ids) : { data: [] },
+  ]);
+  S.ct = { ...(S.ct || {}), off: false, list: data || [], entries: en.data || [], invitees: inv.data || [] };
+}
+const ctGet = (id) => (S.ct?.list || []).find((c) => c.id === id);
+function ctStageLine(c) {
+  const until = (h) => lockLabel(Date.parse(c.stage_at) + h * 3600e3);
+  return {
+    open: Date.now() < Date.parse(c.deadline) ? `Entries close ${lockLabel(Date.parse(c.deadline))}` : "Entries closed · waiting on the result",
+    recorded: `Result: <b>${esc(c.result)}</b> · counts ${until(24)} unless someone says Prove it!`,
+    proving: `Result: <b>${esc(c.result)}</b> · waiting on proof (until ${until(24)})`,
+    proof: `Result: <b>${esc(c.result)}</b> · proof posted, waiting on the challenger (until ${until(24)})`,
+    refereeing: `Result: <b>${esc(c.result)}</b> · with the referee (until ${until(24)})`,
+    settled: `Done and done: <b>${esc(c.result)}</b>`,
+    void: `Called off${c.outcome_note ? ": " + esc(c.outcome_note) : ""}`,
+    canceled: "Canceled",
+  }[c.stage] || "";
+}
+function renderContests() {
+  if (!S.ct) { loadContests().then(render).catch(() => {}); return `<div class="empty"><p>Loading…</p></div>`; }
+  if (S.ct.off) return `<div class="empty"><h3>Contests aren't switched on yet</h3><p>Run update-contests.sql in Supabase.</p></div>`;
+  if (S.ct.view) return renderContest();
+  let form = "";
+  if (S.ct.form) {
+    const f = S.ct.form;
+    form = `<div class="card wfstart">
+      <div class="field"><label for="ctTitle">The question</label><input id="ctTitle" maxlength="90" placeholder="Who wins the Super Bowl this year?" value="${esc(f.title)}" autocomplete="off"></div>
+      <div class="field"><label for="ctChoices">Choices (one per line)</label><textarea id="ctChoices" rows="5" placeholder="Chiefs&#10;Eagles&#10;Bills">${esc(f.choices)}</textarea></div>
+      <label class="rvpick"><input type="checkbox" id="ctWrite" ${f.writeins ? "checked" : ""}> Allow write-ins</label>
+      <div class="ctnums"><div class="field"><label for="ctPts">Points per entry</label><input id="ctPts" type="number" inputmode="numeric" min="1" max="1000" value="${esc(f.points)}"></div>
+        <div class="field"><label for="ctMax">Entries per person</label><input id="ctMax" type="number" inputmode="numeric" min="1" max="20" value="${esc(f.max)}"></div></div>
+      <div class="field"><label for="ctDeadline">Entries close</label><input id="ctDeadline" type="datetime-local" value="${esc(f.deadline)}"></div>
+      <div class="field"><label for="ctVis">Crashers</label><select id="ctVis">${Object.entries(CT_VIS).map(([k, l]) => `<option value="${k}" ${f.vis === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <span class="lab">Invite</span>
+      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="ctInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>
+      <p class="err" id="ctErr" hidden></p>
+      <div class="acts"><button class="btn primary" data-act="ctCreate">Start the contest</button><button class="btn ghost" data-act="ctCancelForm">Cancel</button></div></div>`;
+  }
+  const cards = S.ct.list.map((c) => {
+    const n = S.ct.entries.filter((x) => x.contest_id === c.id).length;
+    return `<article class="card wfround" data-act="ctOpen" data-id="${c.id}"><div class="slip-top"><span class="cat">Contest</span><span class="sub">${c.sponsor === S.me ? "You're sponsoring" : "From " + esc(personName(c.sponsor) || "a friend")} · ${n} entr${n === 1 ? "y" : "ies"} · pot ${n * c.points}</span></div>
+      <h3>${esc(c.title)}</h3><span class="sub">${ctStageLine(c)}</span></article>`;
+  }).join("");
+  return `<div style="display:flex;flex-direction:column;gap:14px">
+    <div class="secthead"><h2>Contests</h2>${S.ct.form ? "" : `<button class="btn quiet" data-act="ctNew">Start a contest</button>`}</div>
+    <span class="sub">A group prediction on anything in the future. Every entry costs the same points; the winning entries split the pot. If nobody's right, everyone gets their points back.</span>
+    ${form}${cards ? `<div class="cards">${cards}</div>` : S.ct.form ? "" : `<div class="empty"><p>No contests yet.</p></div>`}</div>`;
+}
+function renderContest() {
+  const c = ctGet(S.ct.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="ctBack">‹ All contests</button></div>`;
+  if (!c) { S.ct.view = null; return renderContests(); }
+  const nm = (u) => (u === S.me ? "You" : personName(u) || "Someone");
+  const entries = S.ct.entries.filter((x) => x.contest_id === c.id), mine = entries.filter((x) => x.uid === S.me);
+  const invited = c.sponsor === S.me || S.ct.invitees.some((x) => x.contest_id === c.id && x.uid === S.me);
+  const openNow = c.stage === "open" && Date.now() < Date.parse(c.deadline);
+  const canEnter = openNow && (invited || c.visibility !== "invited") && mine.length < c.max_entries;
+  const names = [...c.choices]; for (const x of entries) if (!names.some((n) => n.toLowerCase() === x.choice.toLowerCase())) names.push(x.choice);
+  let out = `<div class="sub">${c.sponsor === S.me ? "You're sponsoring" : "Sponsored by " + esc(nm(c.sponsor))} · <b>${c.points} pts</b> an entry, up to <b>${c.max_entries}</b> each · ${esc(CT_VIS[c.visibility].split(" (")[0])}${c.allow_writeins ? " · write-ins allowed" : ""}</div>
+    <div class="wfstakes"><span>Pot <b>${entries.length * c.points}</b> pts</span><span><b>${entries.length}</b> entr${entries.length === 1 ? "y" : "ies"}</span><span>${ctStageLine(c)}</span></div>`;
+  out += `<span class="lab">Picks</span>` + names.map((n) => {
+    const who = entries.filter((x) => x.choice.toLowerCase() === n.toLowerCase());
+    const minePick = mine.find((x) => x.choice.toLowerCase() === n.toLowerCase());
+    const win = c.result && c.result.toLowerCase() === n.toLowerCase();
+    return `<div class="rvvenue ${win ? "ctwin" : ""}"><span><b>${esc(n)}</b>${win ? " 🏆" : ""} <span class="sub">${who.length ? esc(who.map((x) => nm(x.uid)).join(", ")) : "no entries"}</span></span>
+      ${minePick && openNow ? `<button class="btn quiet" data-act="ctWithdraw" data-id="${minePick.id}">Withdraw</button>` : canEnter && !minePick ? `<button class="btn ghost" data-act="ctEnter" data-v="${esc(n)}">Enter</button>` : ""}</div>`;
+  }).join("");
+  if (canEnter && c.allow_writeins) out += `<div class="pkjoin"><input id="ctWriteIn" maxlength="40" placeholder="Write in a pick" autocomplete="off"><button class="btn" data-act="ctWriteIn">Enter</button></div>`;
+  if (openNow) out += `<span class="sub">${mine.length} of ${c.max_entries} entries used${!invited && c.visibility !== "invited" ? " · you're crashing this one" : ""}${!invited && c.visibility === "invited" ? " · invite only" : ""}.</span>`;
+  // result flow
+  const isSponsor = c.sponsor === S.me, isEntrant = entries.some((x) => x.uid === S.me);
+  const resultInput = (label) => `<div class="pkjoin"><input id="ctResult" maxlength="40" list="ctResultList" placeholder="The result" autocomplete="off"><datalist id="ctResultList">${names.map((n) => `<option value="${esc(n)}">`).join("")}</datalist><button class="btn primary" data-act="ctRecord">${label}</button></div>`;
+  if (c.stage === "open" && !openNow && isSponsor) out += `<div class="card wfstart"><span class="lab">Record the result</span>${resultInput("Record result")}<span class="sub">Everyone with an entry then has 24 hours to say Prove it!</span></div>`;
+  if (c.stage === "recorded" && isEntrant && !isSponsor) out += `<div class="card wfstart"><span class="lab">Disagree with the result?</span><div class="pkjoin"><input id="ctReason" maxlength="280" placeholder="Why (optional)" autocomplete="off"><button class="btn" data-act="ctProve">Prove it!</button></div></div>`;
+  if (c.stage === "proving") {
+    out += `<div class="wfdelete"><div><b>${esc(nm(c.objector))} says prove it.</b>${c.objection ? " “" + esc(c.objection) + "”" : ""}</div></div>`;
+    if (isSponsor) out += `<div class="card wfstart"><span class="lab">Post proof (a link)</span><div class="pkjoin"><input id="ctProof" maxlength="500" placeholder="https://…" autocomplete="off"><button class="btn primary" data-act="ctProof">Post proof</button></div><span class="lab">Or change the result</span>${resultInput("Change result")}<span class="sub">No proof within 24 hours and it's called off.</span></div>`;
+  }
+  if (["proof", "refereeing"].includes(c.stage) && c.proof_link) out += `<div class="sub">Proof: <a href="${esc(c.proof_link)}" target="_blank" rel="noopener">${esc(c.proof_link)}</a></div>`;
+  if (c.stage === "proof" && c.objector === S.me) out += `<div class="card wfstart"><span class="lab">Does the proof hold up?</span><div class="acts"><button class="btn primary" data-act="ctAccept">Accept the proof</button></div>
+    <div class="pkjoin"><input id="ctReason" maxlength="280" placeholder="Why it doesn't hold up" autocomplete="off"><button class="btn" data-act="ctNoHold">It doesn't hold up</button></div></div>`;
+  if (c.stage === "refereeing") out += c.referee === S.me
+    ? `<div class="card wfstart"><span class="lab">You're the referee</span><span class="sub">${esc(nm(c.objector))} says “${esc(c.objection || "")}”.</span><div class="acts"><button class="btn primary" data-act="ctRef" data-v="1">Result stands</button><button class="btn ghost" data-act="ctRef" data-v="0">Call it off</button></div></div>`
+    : `<span class="sub">${esc(nm(c.referee))} is refereeing.</span>`;
+  if (c.stage === "settled") {
+    const wins = entries.filter((x) => x.choice.toLowerCase() === c.result.toLowerCase());
+    out += `<div class="pksubmit done"><div class="pkdone">Done and done</div><span>${esc(c.result)}: ${wins.length} winning entr${wins.length === 1 ? "y" : "ies"} (${esc([...new Set(wins.map((x) => nm(x.uid)))].join(", "))}) split ${entries.length * c.points} pts. Points are in Standings and Rivals.${c.outcome_note ? " " + esc(c.outcome_note) : ""}</span></div>`;
+  }
+  if (isSponsor && c.stage === "open") out += `<div class="acts"><button class="btn quiet" data-act="ctCancel">Cancel contest</button></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head(c.title)}${out}</div>`;
+}
+function ctFormCapture() {
+  const f = S.ct?.form; if (!f || !$("#ctTitle")) return;
+  Object.assign(f, { title: $("#ctTitle").value, choices: $("#ctChoices").value, writeins: $("#ctWrite").checked, points: $("#ctPts").value,
+    max: $("#ctMax").value, deadline: $("#ctDeadline").value, vis: $("#ctVis").value, inv: checked(".ctInv") });
+}
+function ctOpen(id) {
+  S.ct.view = { id }; render();
+  liveSub("contest", [["contests", "id=eq." + id], ["contest_entries", "contest_id=eq." + id]], async () => { if (S.tab === "contest" && S.ct?.view?.id === id) { await loadContests(); render(); } });
+}
+async function ctCreate() {
+  ctFormCapture();
+  const f = S.ct.form, err = (m) => { const x = $("#ctErr"); if (x) { x.textContent = m; x.hidden = false; } };
+  const dl = f.deadline ? new Date(f.deadline) : null;
+  if (!dl || isNaN(dl)) return err("Set when entries close.");
+  const { data, error } = await sb.rpc("create_contest", { p_title: f.title.trim(), p_choices: f.choices.split("\n").map((x) => x.trim()).filter(Boolean),
+    p_writeins: f.writeins, p_points: parseInt(f.points, 10), p_max: parseInt(f.max, 10), p_deadline: dl.toISOString(), p_visibility: f.vis, p_invitees: f.inv });
+  if (error) return err(friendly(error));
+  notifyQuiet({ contest_id: data, kind: "new" });
+  S.ct.form = null; await loadContests(); ctOpen(data); toast("Contest started.");
+}
+async function ctAct(fn, args, note, notify) {
+  const { error } = await sb.rpc(fn, args);
+  if (error) return toast(friendly(error));
+  if (notify) notifyQuiet({ contest_id: S.ct.view.id, kind: "stage" });
+  if (note) toast(note);
+  await Promise.all([loadContests(), notify ? loadBets() : null]); render();
+}
+
 function render() {
   renderLedger(); renderBell();
-  for (const t of ["board", "feed", "rivals", "vegas", "golf"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
+  for (const t of ["board", "feed", "rivals", "vegas", "golf", "rsvp", "contest"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
+  v.innerHTML = S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -1559,7 +1883,7 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  tab: (el) => { if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
   vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
   pkGo: () => { S.tab = "feed"; S.pkView = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
   pkName: () => { S.pkNaming = true; render(); setTimeout(() => $("#pkName")?.focus(), 30); },
@@ -1574,6 +1898,39 @@ const ACT = {
   pkWeek: (el) => pkOpen(S.pkView.gid, weekShift(S.pkView.week, +el.dataset.v)),
   pkPick: (el) => pkPick(S.pkView.gid, el.dataset.id, el.dataset.v),
   pkTb: () => pkSaveTb(),
+  rvNew: () => { S.rsvp.form = { title: "", where: "set", venue: "", notes: "", opts: [{ day: "", time: "", end: "" }], inv: [] }; render(); },
+  rvCancelForm: () => { S.rsvp.form = null; render(); },
+  rvAddOpt: () => { rvFormCapture(); S.rsvp.form.opts.push({ day: "", time: "", end: "" }); render(); },
+  rvDelOpt: (el) => { rvFormCapture(); S.rsvp.form.opts.splice(+el.dataset.v, 1); if (!S.rsvp.form.opts.length) S.rsvp.form.opts.push({ day: "", time: "", end: "" }); render(); },
+  rvCreate: () => rvCreate(),
+  rvOpen: (el) => rvOpen(el.dataset.id),
+  rvBack: () => { liveUnsub("rsvp"); S.rsvp.view = null; S.rsvp.lock = null; loadRsvp().then(render); render(); },
+  rvAns: (el) => { const t = rsvpTally(S.rsvp.view).find((x) => x.id === el.dataset.id); rvAct("rsvp_answer", { p_option: el.dataset.id, p_answer: t?.mine === el.dataset.v ? null : el.dataset.v }, null, "answer"); },
+  rvSuggestDate: () => { const d = $("#rvNewD").value; if (!d) return toast("Pick a day first."); rvAct("rsvp_add_option", { p_event: S.rsvp.view.id, p_day: d, p_end_day: $("#rvNewE").value || null, p_at_time: $("#rvNewT").value || null }, "Date added. You're marked Go on it."); },
+  rvSuggestVenue: () => { const n = $("#rvNewVenue").value.trim(); if (!n) return toast("Type a place first."); rvAct("rsvp_add_venue", { p_event: S.rsvp.view.id, p_name: n }, "Place suggested.", "venue"); },
+  rvVote: (el) => { const x = rsvpVenues(S.rsvp.view).find((y) => y.id === el.dataset.id); rvAct("rsvp_vote_venue", { p_venue: el.dataset.id, p_on: !x?.voters.includes(S.me) }); },
+  rvLockAsk: () => { const v = S.rsvp.view, t = rsvpTally(v), first = t[0]?.id, vs = rsvpVenues(v);
+    S.rsvp.lock = { opt: first, venue: v.e.venue || vs[0]?.name || "__other", other: "", ...rvLockDefaults(first) }; render(); },
+  rvLockNo: () => { S.rsvp.lock = null; render(); },
+  rvAddPerson: () => { rvLockCapture(); const u = $("#rvAddPerson").value; if (!u) return; const L = S.rsvp.lock; if (!L.people.includes(u)) L.people.push(u); if (!L.on.includes(u)) L.on.push(u); render(); },
+  rvLock: () => rvLock(),
+  rvLc: (el) => rvAct("rsvp_lastcall_answer", { p_event: S.rsvp.view.id, p_in: el.dataset.v === "1" }, el.dataset.v === "1" ? "You're in." : "Got it, you're out.", "lastcall"),
+  rvCancelEvent: () => { if (S.rsvp.cancelArm !== S.rsvp.view.id) { S.rsvp.cancelArm = S.rsvp.view.id; return toast("Tap Cancel event again to call it off."); } S.rsvp.cancelArm = null; rvAct("rsvp_cancel", { p_event: S.rsvp.view.id }, "Event canceled."); },
+  ctNew: () => { const d = new Date(Date.now() + 7 * DAY); d.setMinutes(0, 0, 0); S.ct.form = { title: "", choices: "", writeins: false, points: "5", max: "1", deadline: exactInput(d.getTime()), vis: "invited", inv: [] }; render(); },
+  ctCancelForm: () => { S.ct.form = null; render(); },
+  ctCreate: () => ctCreate(),
+  ctOpen: (el) => ctOpen(el.dataset.id),
+  ctBack: () => { liveUnsub("contest"); S.ct.view = null; loadContests().then(render); render(); },
+  ctEnter: (el) => ctAct("contest_enter", { p_contest: S.ct.view.id, p_choice: el.dataset.v }, "You're in."),
+  ctWriteIn: () => { const v = $("#ctWriteIn").value.trim(); if (!v) return toast("Type your pick first."); ctAct("contest_enter", { p_contest: S.ct.view.id, p_choice: v }, "You're in."); },
+  ctWithdraw: (el) => ctAct("contest_withdraw", { p_entry: el.dataset.id }, "Entry withdrawn."),
+  ctRecord: () => { const r = $("#ctResult").value.trim(); if (!r) return toast("Enter the result first."); ctAct("contest_record", { p_contest: S.ct.view.id, p_result: r }, "Result recorded. Entrants have 24 hours to say Prove it!", true); },
+  ctProve: () => ctAct("contest_prove_it", { p_contest: S.ct.view.id, p_reason: $("#ctReason").value }, "Sent. The sponsor has 24 hours to post proof.", true),
+  ctProof: () => ctAct("contest_post_proof", { p_contest: S.ct.view.id, p_link: $("#ctProof").value }, "Proof posted.", true),
+  ctAccept: () => ctAct("contest_accept_proof", { p_contest: S.ct.view.id }, "Accepted. Points are in.", true),
+  ctNoHold: () => ctAct("contest_doesnt_hold", { p_contest: S.ct.view.id, p_reason: $("#ctReason").value }, "A referee will decide.", true),
+  ctRef: (el) => ctAct("contest_referee_pick", { p_contest: S.ct.view.id, p_stands: el.dataset.v === "1" }, "Thanks, ref.", true),
+  ctCancel: () => { if (S.ct.cancelArm !== S.ct.view.id) { S.ct.cancelArm = S.ct.view.id; return toast("Tap Cancel contest again to call it off."); } S.ct.cancelArm = null; ctAct("contest_cancel", { p_contest: S.ct.view.id }, "Contest canceled."); },
   wfStart: () => { S.wolf.starting = true; S.wolf.form = { course: "", sel: [S.me, "", "", ""], guest: ["", "", "", ""], order: [0, 1, 2, 3] }; render(); },
   wfShuffle: () => { wfFormCapture(); S.wolf.form.order = wfShuffled(S.wolf.form.order); render(); },
   wfUp: (el) => { wfFormCapture(); S.wolf.form.order = wfMove(S.wolf.form.order, +el.dataset.v, -1); render(); },
@@ -1783,6 +2140,8 @@ document.addEventListener("change", (e) => {
   if (e.target.id === "proofFile") pickProofFile(e.target);
   if (/^wfSel\d$/.test(e.target.id)) { const i = e.target.id.slice(5); wfFormCapture(); render(); const g = $("#wfGuest" + i); if (g && !g.hidden && !g.value) g.focus(); }
   if (/^wfGuest\d$/.test(e.target.id)) { wfFormCapture(); render(); }
+  if (e.target.name === "rvWhere") { rvFormCapture(); render(); }
+  if (e.target.name === "rvLockOpt") { rvLockCapture(); const L = S.rsvp.lock, d = rvLockDefaults(L.opt); L.people = [...new Set([...d.people, ...L.people])]; L.on = [...new Set([...d.on, ...L.on.filter((u) => !d.people.includes(u))])]; render(); }
 });
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
