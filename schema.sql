@@ -2592,5 +2592,21 @@ grant execute on function public.create_wolf_round(text, jsonb), public.wolf_rou
 do $$ begin alter publication supabase_realtime add table public.wolf_rounds; exception when duplicate_object then null; when undefined_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.wolf_holes; exception when duplicate_object then null; when undefined_object then null; end $$;
 
+-- ================================================================
+-- Wolf End match keeps golf separate (same as update-wolf-3.sql)
+-- ================================================================
+create or replace function public.finish_wolf_round(p_round uuid)
+returns int language plpgsql security definer set search_path = public as $$
+declare r wolf_rounds; holes int;
+begin
+  select * into r from wolf_rounds where id = p_round for update;
+  if not found or not wolf_is_player(p_round) then raise exception 'That round isn''t yours.'; end if;
+  if r.status <> 'playing' then raise exception 'That match is already over.'; end if;
+  select count(*) into holes from wolf_compute(p_round) c where c.complete;
+  if holes = 0 then raise exception 'Enter at least one full hole first.'; end if;
+  update wolf_rounds set status = 'finished', finished_at = now() where id = p_round;
+  return holes;
+end $$;
+
 -- Tell the API to pick up the changes right away.
 notify pgrst, 'reload schema';

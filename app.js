@@ -1265,16 +1265,36 @@ function renderGolf() {
     <div class="acts">${cl.guest_slots.map((i) => `<button class="btn primary" data-act="wfClaim" data-v="${i}">${esc(cl.names[i])}</button>`).join("")}<button class="btn ghost" data-act="wfClaimNo">Cancel</button></div>
     <span class="sub">You'll take that guest's spot and see the round live.</span></div>` : "";
   const rounds = S.wolf.rounds.map((r) => `<article class="card wfround" data-act="wfOpen" data-id="${r.id}">
-      <div class="slip-top"><span class="cat">Wolf</span><span class="sub">${esc(new Date(r.created_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }))} · ${r.status === "finished" ? "Finished" : "<b>In progress</b>"}</span></div>
+      <div class="slip-top"><span class="cat">Wolf</span><span class="sub">${esc(new Date(r.created_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }))} · ${r.status === "finished" ? "Match over" : "<b>In progress</b>"}</span></div>
       <h3>${esc(r.course || "Wolf round")}</h3><span class="sub">${esc(wfNames(r).join(" · "))}</span></article>`).join("");
   return `<div style="display:flex;flex-direction:column;gap:14px">
     <div class="secthead"><h2>Golf</h2>${S.wolf.starting ? "" : `<button class="btn quiet" data-act="wfStart">Start a Wolf round</button>`}</div>
-    <span class="sub">Wolf for a foursome: take a partner, go Lone Wolf (win 3 or pay 1 each) or Blind Wolf before anyone tees off (win 6 or pay 2 each). Ties roll a point over. Last place can press to double the stakes from there on. Greenies, Birdies and Sandies are 1 from each player. When you finish, points go into Standings and Rivals.</span>
+    <span class="sub">Wolf for a foursome: take a partner, go Lone Wolf (win 3 or pay 1 each) or Blind Wolf before anyone tees off (win 6 or pay 2 each). Ties roll a point over. Last place can press to double the stakes from there on. Greenies, Birdies and Sandies are 1 from each player. End the match any time and the app shows who pays whom.</span>
     ${claim}${form}${rounds ? `<div class="cards">${rounds}</div>` : S.wolf.starting ? "" : `<div class="empty"><p>No rounds yet.</p></div>`}
     <div class="pkjoin"><input id="wfCode" maxlength="7" placeholder="Round code" autocomplete="off" autocapitalize="characters" aria-label="Round code"><button class="btn" data-act="wfJoinCode">Join round</button></div></div>`;
 }
 function wfInviteText(r) {
   return `Join my Wolf round${r.course ? " at " + r.course : ""} on Handshake so you can enter and follow scores live. Tap: ${PAGE_URL}?join=${r.code} (or enter code ${r.code} on the Golf tab).`;
+}
+// Who pays whom, net of all offsets, in the fewest payments.
+function wfSettle(tot, names) {
+  const cred = [], debt = [];
+  tot.forEach((t, i) => { if (t > 0) cred.push({ i, n: t }); else if (t < 0) debt.push({ i, n: -t }); });
+  cred.sort((a, b) => b.n - a.n); debt.sort((a, b) => b.n - a.n);
+  const out = [];
+  while (cred.length && debt.length) {
+    const c = cred[0], d = debt[0], amt = Math.min(c.n, d.n);
+    out.push({ from: d.i, to: c.i, pts: amt });
+    c.n -= amt; d.n -= amt;
+    if (!c.n) cred.shift(); if (!d.n) debt.shift();
+  }
+  return out;
+}
+function wfSettleHtml(tot, names, title) {
+  const pays = wfSettle(tot, names);
+  return `<div class="wfsettle"><span class="lab">${title}</span>${pays.length
+    ? pays.map((p) => `<div class="wfpay"><b>${esc(names[p.from])}</b> pays <b>${esc(names[p.to])}</b><span class="mono">${p.pts} pt${p.pts === 1 ? "" : "s"}</span></div>`).join("")
+    : `<div class="wfpay">All square. Nobody owes anything.</div>`}</div>`;
 }
 function renderWolfRound() {
   const v = S.wolf.view, r = wfRound(v.id);
@@ -1323,12 +1343,13 @@ function renderWolfRound() {
   const card = v.board.filter((x) => x.complete).map((x) => `<tr><td class="num">${x.hole}</td><td>${esc(names[x.wolf])}${x.mode === "lone" ? " (L)" : x.mode === "blind" ? " (B)" : ""}</td>${[0, 1, 2, 3].map((i) => `<td class="num ${tone(x["d" + i])}">${x["d" + i] ? signed(x["d" + i]) : "·"}</td>`).join("")}</tr>`).join("");
   const scorecard = card ? `<div class="table wfcardtbl"><table><thead><tr><th class="num">#</th><th>Wolf</th>${names.map((n) => `<th class="num">${esc(n.slice(0, 6))}</th>`).join("")}</tr></thead><tbody>${card}</tbody></table></div>` : "";
   let foot = "";
+  const thru = last ? last.hole : 0;
   if (playing) {
-    foot = `<div class="acts">${S.wolf.confirm === "finish" ? `<button class="btn primary" data-act="wfFinish">Tap again to finish and book the points</button><button class="btn ghost" data-act="wfNo">Not yet</button>`
-      : `<button class="btn" data-act="wfFinishAsk">Finish round</button>`}
-      ${r.created_by === S.me ? (S.wolf.confirm === "delete" ? `<button class="btn ghost" data-act="wfDelete">Tap again to delete this round</button>` : `<button class="btn quiet" data-act="wfDeleteAsk">Delete round</button>`) : ""}</div>
-      <span class="sub">Finishing books what each pair owes into Standings and Rivals. Any player can do it, and it can't be undone.</span>`;
-  } else foot = `<div class="pksubmit done"><div class="pkdone">Round finished</div><span>Points are in Standings and Rivals.</span></div>`;
+    foot = S.wolf.confirm === "finish"
+      ? `${wfSettleHtml(tot, names, `If you end now (thru ${thru})`)}<div class="acts"><button class="btn primary" data-act="wfFinish">End match</button><button class="btn ghost" data-act="wfNo">Keep playing</button></div>`
+      : `<div class="acts"><button class="btn" data-act="wfFinishAsk">End match</button>${r.created_by === S.me ? (S.wolf.confirm === "delete" ? `<button class="btn ghost" data-act="wfDelete">Tap again to delete this round</button>` : `<button class="btn quiet" data-act="wfDeleteAsk">Delete round</button>`) : ""}</div>
+        <span class="sub">End the match any time, after 18 holes or fewer. Any player can do it. Only fully entered holes count.</span>`;
+  } else foot = `<div class="pksubmit done"><div class="pkdone">Match over</div><span>${thru} hole${thru === 1 ? "" : "s"} played. Here's who owes whom, net of everything:</span></div>${wfSettleHtml(tot, names, "Settle up")}`;
   const guests = r.players.filter((p) => !p.uid).map((p) => p.name);
   let invite = "";
   if (playing && r.code) {
@@ -1421,8 +1442,8 @@ async function wfSave() {
 async function wfFinish() {
   const { data, error } = await sb.rpc("finish_wolf_round", { p_round: S.wolf.view.id });
   if (error) return toast(friendly(error));
-  S.wolf.confirm = null; toast(`Round finished. ${data} result${data === 1 ? "" : "s"} booked.`);
-  await Promise.all([loadWolf(), loadBets()]); loadWolfRound();
+  S.wolf.confirm = null; toast(`Match over after ${data} hole${data === 1 ? "" : "s"}.`);
+  await loadWolf(); loadWolfRound();
 }
 async function wfDelete() {
   const { error } = await sb.rpc("delete_wolf_round", { p_round: S.wolf.view.id });
