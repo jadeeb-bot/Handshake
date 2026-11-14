@@ -174,7 +174,9 @@ tr.me td{background:var(--pen-soft)}
 .wfhole.done{background:color-mix(in srgb,var(--good) 18%,var(--slip));border-color:color-mix(in srgb,var(--good) 45%,transparent)}
 .wfhole.on{outline:2px solid var(--pen);outline-offset:1px}
 .wfcard h3{margin:0}
-.wfmodes{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.wfmodes{display:flex;flex-direction:column;gap:6px}
+.wfsplit{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.wfsplit .vpick{white-space:normal;line-height:1.2}
 .wfpress{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:14px}
 .wfpress.on{background:color-mix(in srgb,var(--warn) 18%,var(--slip));border-radius:8px;padding:8px 10px}
 .wfrow{display:grid;grid-template-columns:1fr 64px;gap:6px 10px;align-items:center;border-top:1px dashed var(--line);padding-top:8px}

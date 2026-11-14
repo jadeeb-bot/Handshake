@@ -99,7 +99,9 @@ The **Golf** tab tracks Wolf rounds for a foursome (Handshake people or guests).
 
 **Tee order:** players are entered in any order, then the tee order is set with 🎲 Random order or ↑/↓. Any player can change it on the round (`reorder_wolf_round()`) until the first hole is saved.
 
-Run `update-wolf.sql`, `update-wolf-2.sql`, `update-wolf-3.sql`, then `update-wolf-4.sql`, and redeploy `notify`.
+**Dump:** when the Wolf picks a partner, that player can dump the Wolf and go alone; they score exactly like a Lone Wolf against the other three (mode `dump`, partner = who dumped).
+
+Run `update-wolf.sql` through `update-wolf-5.sql` in order, and redeploy `notify`.
 
 ## Good to know
 

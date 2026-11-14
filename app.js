@@ -1286,7 +1286,7 @@ function renderGolf() {
       <h3>${esc(r.course || "Wolf round")}</h3><span class="sub">${esc(wfNames(r).join(" · "))}</span></article>`).join("");
   return `<div style="display:flex;flex-direction:column;gap:14px">
     <div class="secthead"><h2>Golf</h2>${S.wolf.starting ? "" : `<button class="btn quiet" data-act="wfStart">Start a Wolf round</button>`}</div>
-    <span class="sub">Wolf for a foursome: take a partner, go Lone Wolf (win 3 or pay 1 each) or Blind Wolf before anyone tees off (win 6 or pay 2 each). Ties roll a point over. Last place can press to double the stakes from there on. Greenies, Birdies and Sandies are 1 from each player. End the match any time and the app shows who pays whom.</span>
+    <span class="sub">Wolf for a foursome: take a partner (who can dump the Wolf and go it alone), go Lone Wolf (win 3 or pay 1 each) or Blind Wolf before anyone tees off (win 6 or pay 2 each). Ties roll a point over. Last place can press to double the stakes from there on. Greenies, Birdies and Sandies are 1 from each player. End the match any time and the app shows who pays whom.</span>
     ${claim}${form}${rounds ? `<div class="cards">${rounds}</div>` : S.wolf.starting ? "" : `<div class="empty"><p>No rounds yet.</p></div>`}
     <div class="pkjoin"><input id="wfCode" maxlength="7" placeholder="Round code" autocomplete="off" autocapitalize="characters" aria-label="Round code"><button class="btn" data-act="wfJoinCode">Join round</button></div></div>`;
 }
@@ -1337,10 +1337,13 @@ function renderWolfRound() {
   const mult = d.mode === "blind" ? 2 : 1, pressNow = d.press != null ? 1 : 0;
   const unit = (1 + priorCarry) * mult * 2 ** (priorPresses + pressNow);
   const lock = !playing ? "disabled" : "";
-  const modeBtns = [0, 1, 2, 3].filter((i) => i !== w).map((i) => `<button class="btn ghost vpick ${d.mode === "partner" && d.partner === i ? "on" : ""}" data-act="wfMode" data-v="p${i}" ${lock}>w/ ${esc(names[i])}</button>`).join("")
-    + `<button class="btn ghost vpick ${d.mode === "lone" ? "on" : ""}" data-act="wfMode" data-v="lone" ${lock}>Lone Wolf</button>`
-    + `<button class="btn ghost vpick ${d.mode === "blind" ? "on" : ""}" data-act="wfMode" data-v="blind" ${lock}>Blind Wolf</button>`;
-  const worth = d.mode === "partner" ? `Each loser pays each winner <b>${unit}</b>.` : d.mode === "lone" ? `Lone Wolf wins <b>${unit}</b> from each player (${unit * 3}) or pays <b>${unit}</b> to each.`
+  const modeBtns = [0, 1, 2, 3].filter((i) => i !== w).map((i) => `<div class="wfsplit">
+      <button class="btn ghost vpick ${d.mode === "partner" && d.partner === i ? "on" : ""}" data-act="wfMode" data-v="p${i}" ${lock}>w/ ${esc(names[i])}</button>
+      <button class="btn ghost vpick ${d.mode === "dump" && d.partner === i ? "on" : ""}" data-act="wfMode" data-v="d${i}" ${lock}>${esc(names[i])} dumps ${esc(names[w])}</button></div>`).join("")
+    + `<div class="wfsplit"><button class="btn ghost vpick ${d.mode === "lone" ? "on" : ""}" data-act="wfMode" data-v="lone" ${lock}>Lone Wolf</button>
+      <button class="btn ghost vpick ${d.mode === "blind" ? "on" : ""}" data-act="wfMode" data-v="blind" ${lock}>Blind Wolf</button></div>`;
+  const worth = d.mode === "partner" ? `Each loser pays each winner <b>${unit}</b>.`
+    : d.mode === "dump" ? `${esc(names[d.partner])} dumped ${esc(names[w])} and plays it alone: wins <b>${unit}</b> from each player (${unit * 3}) or pays <b>${unit}</b> to each.` : d.mode === "lone" ? `Lone Wolf wins <b>${unit}</b> from each player (${unit * 3}) or pays <b>${unit}</b> to each.`
     : d.mode === "blind" ? `Blind Wolf wins <b>${unit}</b> from each player (${unit * 3}) or pays <b>${unit}</b> to each.` : `Worth ${(1 + priorCarry) * 2 ** (priorPresses + pressNow)} a player${priorCarry ? ` (${priorCarry} rolled over)` : ""}. Blind Wolf doubles it.`;
   let press = "";
   if (d.press != null) press = `<div class="wfpress on"><span>⚡ <b>${esc(names[d.press])}</b> pressed: stakes double from this hole on.</span>${playing ? `<button class="btn quiet" data-act="wfPress" data-v="">Undo</button>` : ""}</div>`;
@@ -1357,7 +1360,7 @@ function renderWolfRound() {
     ${playing ? `<div class="acts"><button class="btn primary" data-act="wfSave">Save hole ${hn}${hn < 18 ? " & next" : ""}</button></div>` : ""}
   </article>`;
   // scorecard
-  const card = v.board.filter((x) => x.complete).map((x) => `<tr><td class="num">${x.hole}</td><td>${esc(names[x.wolf])}${x.mode === "lone" ? " (L)" : x.mode === "blind" ? " (B)" : ""}</td>${[0, 1, 2, 3].map((i) => `<td class="num ${tone(x["d" + i])}">${x["d" + i] ? signed(x["d" + i]) : "·"}</td>`).join("")}</tr>`).join("");
+  const card = v.board.filter((x) => x.complete).map((x) => `<tr><td class="num">${x.hole}</td><td>${esc(names[x.wolf])}${x.mode === "lone" ? " (L)" : x.mode === "blind" ? " (B)" : x.mode === "dump" ? " (D)" : ""}</td>${[0, 1, 2, 3].map((i) => `<td class="num ${tone(x["d" + i])}">${x["d" + i] ? signed(x["d" + i]) : "·"}</td>`).join("")}</tr>`).join("");
   const scorecard = card ? `<div class="table wfcardtbl"><table><thead><tr><th class="num">#</th><th>Wolf</th>${names.map((n) => `<th class="num">${esc(n.slice(0, 6))}</th>`).join("")}</tr></thead><tbody>${card}</tbody></table></div>` : "";
   let foot = "";
   const thru = last ? last.hole : 0;
@@ -1452,7 +1455,7 @@ async function wfCreate() {
 async function wfSave() {
   const v = S.wolf.view; wfCapture();
   const d = v.draft, hn = v.hole;
-  if (d.mode === "partner" && d.partner == null) return toast("Pick the Wolf's partner.");
+  if ((d.mode === "partner" || d.mode === "dump") && d.partner == null) return toast("Pick the Wolf's partner.");
   const { error } = await sb.rpc("save_wolf_hole", { p_round: v.id, p_hole: hn, p_mode: d.mode, p_partner: d.partner, p_scores: d.scores,
     p_greenie: d.greenie, p_birdie: d.birdie, p_sandy: d.sandy, p_pressed_by: d.press });
   if (error) return toast(friendly(error));
@@ -1567,7 +1570,7 @@ const ACT = {
   wfClaimNo: () => { S.wolf.claim = null; render(); },
   wfHole: (el) => { wfCapture(); S.wolf.view.dirty = false; wfDraftFor(+el.dataset.v); render(); },
   wfMode: (el) => { wfCapture(); S.wolf.view.dirty = true; const d = S.wolf.view.draft, x = el.dataset.v;
-    if (x[0] === "p") { const p = +x.slice(1); if (d.mode === "partner" && d.partner === p) { d.mode = null; d.partner = null; } else { d.mode = "partner"; d.partner = p; } }
+    if (x[0] === "p" || x[0] === "d") { const m = x[0] === "p" ? "partner" : "dump", p = +x.slice(1); if (d.mode === m && d.partner === p) { d.mode = null; d.partner = null; } else { d.mode = m; d.partner = p; } }
     else if (d.mode === x) d.mode = null; else { d.mode = x; d.partner = null; }
     render(); },
   wfBonus: (el) => { wfCapture(); S.wolf.view.dirty = true; const d = S.wolf.view.draft, k = el.dataset.v, i = +el.dataset.i; d[k] = d[k].includes(i) ? d[k].filter((x) => x !== i) : [...d[k], i]; render(); },
