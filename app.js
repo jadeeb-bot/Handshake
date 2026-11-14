@@ -754,7 +754,9 @@ function renderQuanto() {
   rs.sort((a, b) => b.current - a.current);
   const rows = rs.map((r) => {
     const h = r.uid && S.rivalVenmo?.get(r.uid);
-    const pay = r.current < 0 && h ? `<a class="btn ghost" href="https://venmo.com/u/${encodeURIComponent(h)}" target="_blank" rel="noopener">Pay @${esc(h)} on Venmo</a>` : "";
+    const note = "Handshake settle-up with " + (S.myName || "me");
+    const pay = r.current < 0 ? `<a class="btn ghost" href="${esc(venmoLink("pay", h, -r.current, note))}">Pay ${dollars(-r.current)}${h ? " to @" + esc(h) : ""} on Venmo</a>`
+      : r.current > 0 && r.uid ? `<a class="btn ghost" href="${esc(venmoLink("request", h, r.current, note))}">Request ${dollars(r.current)} on Venmo</a>` : "";
     let acts;
     if (S.settling === r.key) acts = r.current > 0 ? settlePanel(r) : requestPanel(r);
     else {
@@ -784,7 +786,10 @@ function feedCard(b) {
   const p = stakeOf(b);
   const vs = b.parentId
     ? `<b>${esc(nameOf(b, "a"))}</b> crashed in backing ${esc(b.backsName || "")}, against <b>${esc(nameOf(b, "b"))}</b>`
-    : `<b>${esc(nameOf(b, "a"))}</b> called it. <b>${esc(nameOf(b, "b"))}</b> took the other side.`;
+    : `<b>${esc(nameOf(b, "a"))}</b> called it. ${b.status === "proposed" && !expired(b) ? `Waiting for <b>${esc(nameOf(b, "b"))}</b> to shake on it.`
+        : b.status === "proposed" ? `<b>${esc(nameOf(b, "b"))}</b> never shook on it.`
+        : b.b?.signed ? `<b>${esc(nameOf(b, "b"))}</b> shook on it.`
+        : `<b>${esc(nameOf(b, "b"))}</b> passed.`}`;
   let tail = "";
   if (S.crashing === b.id && crashable(b)) tail = crashPanel(b);
   else if (crashable(b)) tail = `<div class="acts"><button class="btn primary" data-act="crash" data-id="${b.id}">Crash it</button><span class="sub">Back either side and get in on the action.</span></div>`;
@@ -834,6 +839,37 @@ function rivalSentence(r) {
   return r.lastSettled ? `All square with ${nm}.` : `Dead even with ${nm} on points.`;
 }
 /* ---------- Venmo on settle-ups ---------- */
+const USD_PER_POINT = 1;   // decided Nov 14: 1 point = $1 for Venmo requests and payments
+// Opens Venmo with everything filled in; the person still taps Request / Pay.
+function venmoLink(kind, handle, points, note) {
+  const q = new URLSearchParams({ txn: kind === "request" ? "charge" : "pay", amount: String(points * USD_PER_POINT), note: note || "Handshake settle-up" });
+  if (handle) q.set("recipients", handle);
+  const mobile = IN_APP || /iPhone|iPad|iPod|Android/.test(navigator.userAgent);
+  if (!mobile) q.set("audience", "private");
+  return (mobile ? "venmo://paycharge?" : "https://venmo.com/?") + q.toString();
+}
+const dollars = (p) => "$" + (p * USD_PER_POINT).toLocaleString("en-US");
+function phoneForUid(uid) {
+  if (!uid) return "";
+  for (const b of S.bets) if ((b.a?.uid === uid || b.b?.uid === uid) && S.phones?.get(b.id)) return S.phones.get(b.id);
+  return "";
+}
+// Shown right after a settle-up: the usual message options, Venmo included.
+function settleDoneBox() {
+  const d = S.settleDone; if (!d) return "";
+  const v = d.venmo ? ` Venmo: @${d.venmo} (venmo.com/u/${d.venmo}).` : "";
+  const text = d.kind === "settled"
+    ? `Settled up on Handshake: the ${pts(d.points)} you owed me are cleared.${d.venmo ? ` Send me ${dollars(d.points)} on Venmo: @${d.venmo} (venmo.com/u/${d.venmo}).` : ""}`
+    : `I just settled up the ${pts(d.points)} I owed you on Handshake. Confirm it in the app within 24 hours.${v}`;
+  const num = phoneForUid(d.uid) || store.get(phoneKey(d.name)) || "";
+  const theirs = d.uid && S.rivalVenmo?.get(d.uid);
+  const venmoBtn = d.kind === "settled"
+    ? `<a class="btn" href="${esc(venmoLink("request", theirs, d.points, "Handshake settle-up with " + (S.myName || "me")))}">Request ${dollars(d.points)} on Venmo${theirs ? " from @" + esc(theirs) : ""}</a>`
+    : `<a class="btn" href="${esc(venmoLink("pay", theirs, d.points, "Handshake settle-up with " + (S.myName || "me")))}">Pay ${dollars(d.points)} on Venmo${theirs ? " to @" + esc(theirs) : ""}</a>`;
+  return `<div class="cpanel settledone"><span class="lab">Let ${esc(d.name)} know</span><p class="msg">${esc(text)}</p>
+    <div class="acts"><button class="btn primary" data-act="sdCopy">Copy</button><a class="btn" href="${esc(smsHref(num, text))}">Open Messages</a>${venmoBtn}<button class="btn ghost" data-act="sdClose">Done</button></div>
+    <span class="sub">${d.uid ? "They also got a Handshake notification. " : ""}Venmo opens with ${theirs ? "@" + esc(theirs) + ", " : ""}${dollars(d.points)} and a note filled in; you just tap ${d.kind === "settled" ? "Request" : "Pay"}.${theirs ? "" : " Pick the person in Venmo."}</span></div>`;
+}
 function venmoField() {
   return `<div class="vmfield"><label for="vmHandle"><b>Add your Venmo handle to the notification?</b> <span class="sub">Optional. Leave it blank to skip.</span></label>
     <input id="vmHandle" maxlength="60" placeholder="@your-venmo" value="${esc(S.myVenmo ? "@" + S.myVenmo : "")}" autocomplete="off" autocapitalize="none"></div>`;
@@ -855,9 +891,9 @@ async function venmoAfterSettle(handle, ids) {
   return true;
 }
 function venmoAskBox() {
-  if (!S.venmoAsk) return "";
+  if (!S.venmoAsk) return settleDoneBox();
   return `<div class="vmask"><div><b>Want me to remember your Venmo handle?</b> I'll fill in @${esc(S.venmoAsk)} next time, and people who owe you will see it on Quanto.</div>
-    <div class="acts"><button class="btn primary" data-act="venmoYes">Yes, remember it</button><button class="btn ghost" data-act="venmoNo">No thanks</button></div></div>`;
+    <div class="acts"><button class="btn primary" data-act="venmoYes">Yes, remember it</button><button class="btn ghost" data-act="venmoNo">No thanks</button></div></div>` + settleDoneBox();
 }
 function settlePanel(r) {
   return `<div class="cpanel"><span class="lab">Settle up with ${esc(r.name)}</span>
@@ -895,7 +931,7 @@ function rivalActs(r) {
 }
 function renderRivals() {
   const table = standings(), rs = rivals();
-  if (S.venmoAsk && (table.length || rs.length)) return venmoAskBox() + renderRivalsInner(table, rs);
+  if ((S.venmoAsk || S.settleDone) && (table.length || rs.length)) return venmoAskBox() + renderRivalsInner(table, rs);
   return renderRivalsInner(table, rs);
 }
 function renderRivalsInner(table, rs) {
@@ -2238,6 +2274,8 @@ const ACT = {
   shakeIn: (el) => { $("#fShakeBy").value = localInput(Date.now() + Number(el.dataset.h) * 3600e3); },
   settle: (el) => { S.settling = el.dataset.k; render(); },
   venmoYes: async () => { const h = S.venmoAsk; S.venmoAsk = null; const { data, error } = await sb.rpc("set_my_venmo", { p_handle: h }); if (error) return toast(friendly(error)); S.myVenmo = data || h; render(); toast("Got it. I'll remember @" + S.myVenmo + "."); },
+  sdCopy: () => { const t = $(".settledone .msg")?.textContent || ""; copy(t, "Copied. Paste it into your text."); },
+  sdClose: () => { S.settleDone = null; render(); },
   venmoNo: () => { store.set("hs-venmo-no", S.venmoAsk); S.venmoAsk = null; render(); },
   unsettle: () => { S.settling = null; render(); },
   confirmSettle: async (el) => {
@@ -2248,6 +2286,7 @@ const ACT = {
     S.settling = null; await loadSettlements();
     const mine = S.settlements.filter((x) => x.user_uid === S.me && (r.uid ? x.other_uid === r.uid : x.other_name === r.name)).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
     const sentVenmo = mine && r.uid ? await venmoAfterSettle(handle, { settlement: mine.id }) : false;
+    S.settleDone = { kind: "settled", uid: r.uid, name: r.name, points: data, venmo: sentVenmo ? venmoClean(handle) : (venmoClean(handle) || "") };
     render();
     toast(`Settled. ${pts(data)} cleared with ${r.name}.${sentVenmo ? " Your Venmo went with the notification." : ""} Your all-time record stays.`);
     if (mine && r.uid) notifyQuiet({ settlement_id: mine.id });
@@ -2259,6 +2298,7 @@ const ACT = {
     if (error) { toast(friendly(error)); return; }
     S.settling = null; await loadSettlements();
     const sentVenmo = await venmoAfterSettle(handle, { request: data });
+    S.settleDone = { kind: "request", uid: r.uid, name: r.name, points: -r.current, venmo: venmoClean(handle) || "" };
     render();
     toast(`Sent${sentVenmo ? " with your Venmo" : ""}. ${r.name} has 24 hours to confirm or dispute it.`);
     notifyQuiet({ settlement_request_id: data });
