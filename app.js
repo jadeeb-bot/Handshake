@@ -1648,6 +1648,7 @@ function renderRsvpEvent() {
   if (e.status === "locked") {
     const lo = v.opts.find((o) => o.id === e.locked_option), my = v.lc.find((x) => x.uid === S.me);
     out += `<div class="pksubmit done"><div class="pkdone">Locked down</div><span><b>${esc(lo ? optLabel(lo) : "")}</b> at <b>${esc(e.locked_venue)}</b></span></div>`;
+    if (!my || my.status !== "out") out += rvCalendar(e, lo);
     if (my) out += `<div class="acts"><button class="btn ${my.status === "in" ? "primary" : "ghost"}" data-act="rvLc" data-v="1">I'm in</button><button class="btn ${my.status === "out" ? "primary" : "ghost"}" data-act="rvLc" data-v="0">Can't make it</button></div>`;
     out += `<div class="table"><table><thead><tr><th>Last call</th><th class="num">Answer</th></tr></thead><tbody>
       <tr><td>${esc(nm(e.organizer))} <span class="sub">organizer</span></td><td class="num pos">In</td></tr>
@@ -1726,6 +1727,24 @@ function rvFormCapture() {
   f.opts = f.opts.map((o, i) => ({ day: $("#rvD" + i)?.value || "", time: $("#rvT" + i)?.value || "", end: $("#rvE" + i)?.value || "" }));
   f.inv = checked(".rvInv");
   f.phones = rvPhoneCapture(f.phones);
+}
+// Add to Calendar: an .ics file from the website (works in the browser and the iPhone app) or Google Calendar.
+function rvCalendar(e, lo) {
+  if (!lo) return "";
+  const q = new URLSearchParams({ t: e.title, l: e.locked_venue || "", d: lo.day, n: e.notes || "", u: e.id });
+  if (lo.end_day && lo.end_day !== lo.day) q.set("e", lo.end_day);
+  if (lo.at_time) q.set("h", lo.at_time.slice(0, 5));
+  const ics = new URL("api/ics?" + q.toString(), PAGE_URL).href;
+  const d8 = (x) => x.replace(/-/g, ""), next = (x) => { const t = new Date(x + "T12:00:00Z"); t.setUTCDate(t.getUTCDate() + 1); return t.toISOString().slice(0, 10); };
+  let dates;
+  if (lo.at_time) {
+    const [h, m] = lo.at_time.split(":").map(Number), start = new Date(Date.UTC(...lo.day.split("-").map((x, i) => (i === 1 ? x - 1 : +x)), h, m));
+    const endBase = lo.end_day && lo.end_day !== lo.day ? new Date(Date.UTC(...lo.end_day.split("-").map((x, i) => (i === 1 ? x - 1 : +x)), h, m)) : start;
+    const end = new Date(endBase.getTime() + 2 * 3600e3), f = (t) => t.toISOString().replace(/[-:]/g, "").slice(0, 15);
+    dates = f(start) + "/" + f(end);
+  } else dates = d8(lo.day) + "/" + d8(next(lo.end_day || lo.day));
+  const g = "https://calendar.google.com/calendar/render?" + new URLSearchParams({ action: "TEMPLATE", text: e.title, dates, location: e.locked_venue || "", details: (e.notes ? e.notes + " · " : "") + "Planned on Handshake." }).toString();
+  return `<div class="rvcal"><span class="lab">Add to Calendar</span><div class="acts"><a class="btn primary" href="${esc(ics)}" target="_blank" rel="noopener">Apple / Outlook</a><a class="btn ghost" href="${esc(g)}" target="_blank" rel="noopener">Google Calendar</a></div></div>`;
 }
 function rvInviteText(e) {
   return `${S.myName || "A friend"} invited you to "${e.title}" on Handshake. Pick the dates that work for you: sign up at ${PAGE_URL} with this phone number and it'll be waiting for you.`;
