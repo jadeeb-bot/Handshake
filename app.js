@@ -70,7 +70,7 @@ function fromRow(r) {
     objection: r.objection || "", referee: r.referee_uid || r.referee_name ? { uid: r.referee_uid, name: r.referee_name || "the referee" } : null,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
     counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
-    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null, pickem: r.pickem_group || null,
+    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null, pickem: r.pickem_group || null, wolf: r.wolf_round || null,
     createdAt: Date.parse(r.created_at), decidedAt: r.decided_at ? Date.parse(r.decided_at) : null, log: r.log || [],
   };
 }
@@ -765,7 +765,7 @@ function crashPanel(b) {
 }
 const FEED_FILTERS = [["crash", "Open to crash"], ["live", "In play"], ["all", "Everything"]];
 function renderFeed() {
-  const bets = S.bets.filter((b) => !b.pickem);
+  const bets = S.bets.filter((b) => !b.pickem && !b.wolf);
   if (!bets.length) return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div></div>`;
   const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
   const list = bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -1212,12 +1212,165 @@ if (IN_APP) {
   } catch (e) {}
 }
 
+/* ---------- Golf: Wolf ---------- */
+const WF_BONUS = [["greenie", "Greenie"], ["birdie", "Birdie"], ["sandy", "Sandy"]];
+async function loadWolf() {
+  const { data, error } = await sb.from("wolf_rounds").select("*").order("created_at", { ascending: false }).limit(30);
+  S.wolf = { ...(S.wolf || {}), off: !!error, rounds: data || [] };
+}
+const wfRound = (id) => (S.wolf?.rounds || []).find((r) => r.id === id);
+const wfNames = (r) => r.players.map((p) => p.name);
+async function loadWolfRound() {
+  const v = S.wolf?.view; if (!v) return;
+  const [b, h] = await Promise.all([sb.rpc("wolf_scoreboard", { p_round: v.id }), sb.from("wolf_holes").select("*").eq("round_id", v.id)]);
+  if (b.error) { v.err = friendly(b.error); render(); return; }
+  v.board = b.data || []; v.holes = h.data || []; v.err = "";
+  if (!v.hole) { const done = v.board.filter((x) => x.complete).map((x) => x.hole); v.hole = Math.min(18, (done.length ? Math.max(...done) : 0) + 1); }
+  wfDraftFor(v.hole);
+  render();
+}
+function wfDraftFor(hole) {
+  const v = S.wolf.view, h = v.holes.find((x) => x.hole === hole);
+  v.hole = hole;
+  v.draft = h ? { mode: h.mode, partner: h.partner, scores: [...h.scores], greenie: [...h.greenie], birdie: [...h.birdie], sandy: [...h.sandy], press: h.pressed_by }
+    : { mode: null, partner: null, scores: [null, null, null, null], greenie: [], birdie: [], sandy: [], press: null };
+}
+function wfCapture() {  // keep typed scores when the screen re-draws
+  const v = S.wolf?.view; if (!v?.draft) return;
+  for (let i = 0; i < 4; i++) { const el = $("#wfS" + i); if (el) { const n = parseInt(el.value, 10); v.draft.scores[i] = Number.isFinite(n) ? n : null; } }
+}
+function wfTotals(board, beforeHole) {
+  const t = [0, 0, 0, 0];
+  for (const x of board) if (beforeHole == null || x.hole < beforeHole) { t[0] += x.d0; t[1] += x.d1; t[2] += x.d2; t[3] += x.d3; }
+  return t;
+}
+function renderGolf() {
+  if (!S.wolf) { loadWolf().then(render).catch(() => {}); return `<div class="empty"><p>Loading…</p></div>`; }
+  if (S.wolf.off) return `<div class="empty"><h3>Golf isn't switched on yet</h3><p>Run update-wolf.sql in Supabase.</p></div>`;
+  if (S.wolf.view) return renderWolfRound();
+  let form = "";
+  if (S.wolf.starting) {
+    const opts = (sel) => [`<option value="">Pick a player…</option>`, ...S.people.map((p) => `<option value="${p.id}" ${sel === p.id ? "selected" : ""}>${esc(p.name)}${p.id === S.me ? " (you)" : ""}</option>`), `<option value="guest">Guest (not on Handshake)</option>`].join("");
+    const holesFor = (i) => [1, 2, 3, 4, 5].map((k) => i + 1 + 4 * (k - 1)).filter((x) => x <= 18).join(", ");
+    form = `<div class="card wfstart"><div class="field"><label for="wfCourse">Course (optional)</label><input id="wfCourse" maxlength="40" placeholder="Torrey Pines South" autocomplete="off"></div>
+      <span class="lab">Tee order</span><span class="sub">The Wolf rotates in this order and keeps going on 17 and 18.</span>
+      ${[0, 1, 2, 3].map((i) => `<div class="wfslot"><span class="rk">${i + 1}</span><div class="wfslotin"><select id="wfSel${i}" aria-label="Player ${i + 1}">${opts(i === 0 ? S.me : "")}</select>
+        <input id="wfGuest${i}" maxlength="30" placeholder="Guest's name" hidden autocomplete="off"><span class="sub">Wolf on ${holesFor(i)}</span></div></div>`).join("")}
+      <p class="err" id="wfErr" hidden></p>
+      <div class="acts"><button class="btn primary" data-act="wfCreate">Tee it up</button><button class="btn ghost" data-act="wfCancel">Cancel</button></div></div>`;
+  }
+  const rounds = S.wolf.rounds.map((r) => `<article class="card wfround" data-act="wfOpen" data-id="${r.id}">
+      <div class="slip-top"><span class="cat">Wolf</span><span class="sub">${esc(new Date(r.created_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }))} · ${r.status === "finished" ? "Finished" : "<b>In progress</b>"}</span></div>
+      <h3>${esc(r.course || "Wolf round")}</h3><span class="sub">${esc(wfNames(r).join(" · "))}</span></article>`).join("");
+  return `<div style="display:flex;flex-direction:column;gap:14px">
+    <div class="secthead"><h2>Golf</h2>${S.wolf.starting ? "" : `<button class="btn quiet" data-act="wfStart">Start a Wolf round</button>`}</div>
+    <span class="sub">Wolf for a foursome: take a partner, go Lone Wolf (win 3 or pay 1 each) or Blind Wolf before anyone tees off (win 6 or pay 2 each). Ties roll a point over. Last place can press to double the stakes from there on. Greenies, Birdies and Sandies are 1 from each player. When you finish, points go into Standings and Rivals.</span>
+    ${form}${rounds ? `<div class="cards">${rounds}</div>` : S.wolf.starting ? "" : `<div class="empty"><p>No rounds yet.</p></div>`}</div>`;
+}
+function renderWolfRound() {
+  const v = S.wolf.view, r = wfRound(v.id);
+  if (!r) { S.wolf.view = null; return renderGolf(); }
+  const names = wfNames(r), playing = r.status === "playing";
+  const head = `<div class="secthead"><h2>${esc(r.course || "Wolf round")}</h2><button class="btn quiet" data-act="wfBack">‹ All rounds</button></div>`;
+  if (!v.board) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>${v.err ? esc(v.err) : "Loading the round…"}</p></div></div>`;
+  const tot = wfTotals(v.board), order = [0, 1, 2, 3].sort((a, b) => tot[b] - tot[a]);
+  const last = v.board.filter((x) => x.complete).slice(-1)[0];
+  const presses = v.board.length ? Math.max(...v.board.map((x) => x.presses)) : 0;
+  const carry = (() => { let c = 0; for (const x of v.board) if (x.complete) c = x.result?.startsWith("Tied") ? c + 1 : 0; return c; })();
+  const stakes = `<div class="wfstakes"><span>Stakes <b>${2 ** presses}x</b>${presses ? ` (${presses} press${presses > 1 ? "es" : ""})` : ""}</span><span>${carry ? `<b>${carry}</b> point${carry > 1 ? "s" : ""} rolling over` : "Nothing rolling over"}</span><span>Thru <b>${last ? last.hole : 0}</b></span></div>`;
+  const table = `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th></tr></thead><tbody>${order.map((i, k) =>
+    `<tr class="${r.players[i].uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${k + 1}</span><span>${esc(names[i])}${r.players[i].uid ? "" : ` <span class="sub">guest</span>`}</span></td><td class="num ${tone(tot[i])}">${signed(tot[i])}</td></tr>`).join("")}</tbody></table></div>`;
+  const chips = `<div class="wfholes">${Array.from({ length: 18 }, (_, k) => k + 1).map((n) => {
+    const b = v.board.find((x) => x.hole === n);
+    return `<button class="wfhole ${n === v.hole ? "on" : ""} ${b?.complete ? "done" : ""}" data-act="wfHole" data-v="${n}" aria-label="Hole ${n}">${n}</button>`; }).join("")}</div>`;
+  // the hole being entered
+  const d = v.draft, hn = v.hole, w = (hn - 1) % 4, saved = v.board.find((x) => x.hole === hn);
+  const before = wfTotals(v.board, hn), low = Math.min(...before);
+  const priorPresses = v.board.filter((x) => x.hole < hn).reduce((m, x) => Math.max(m, x.presses), 0);
+  let priorCarry = 0; for (const x of v.board) if (x.hole < hn && x.complete) priorCarry = x.result?.startsWith("Tied") ? priorCarry + 1 : 0;
+  const mult = d.mode === "blind" ? 2 : 1, pressNow = d.press != null ? 1 : 0;
+  const unit = (1 + priorCarry) * mult * 2 ** (priorPresses + pressNow);
+  const lock = !playing ? "disabled" : "";
+  const modeBtns = [0, 1, 2, 3].filter((i) => i !== w).map((i) => `<button class="btn ghost vpick ${d.mode === "partner" && d.partner === i ? "on" : ""}" data-act="wfMode" data-v="p${i}" ${lock}>w/ ${esc(names[i])}</button>`).join("")
+    + `<button class="btn ghost vpick ${d.mode === "lone" ? "on" : ""}" data-act="wfMode" data-v="lone" ${lock}>Lone Wolf</button>`
+    + `<button class="btn ghost vpick ${d.mode === "blind" ? "on" : ""}" data-act="wfMode" data-v="blind" ${lock}>Blind Wolf</button>`;
+  const worth = d.mode === "partner" ? `Each loser pays each winner <b>${unit}</b>.` : d.mode === "lone" ? `Lone Wolf wins <b>${unit}</b> from each player (${unit * 3}) or pays <b>${unit}</b> to each.`
+    : d.mode === "blind" ? `Blind Wolf wins <b>${unit}</b> from each player (${unit * 3}) or pays <b>${unit}</b> to each.` : `Worth ${(1 + priorCarry) * 2 ** (priorPresses + pressNow)} a player${priorCarry ? ` (${priorCarry} rolled over)` : ""}. Blind Wolf doubles it.`;
+  let press = "";
+  if (d.press != null) press = `<div class="wfpress on"><span>⚡ <b>${esc(names[d.press])}</b> pressed: stakes double from this hole on.</span>${playing ? `<button class="btn quiet" data-act="wfPress" data-v="">Undo</button>` : ""}</div>`;
+  else if (playing && !saved?.complete) press = `<div class="wfpress">${[0, 1, 2, 3].filter((i) => before[i] === low).map((i) => `<button class="btn ghost" data-act="wfPress" data-v="${i}">⚡ ${esc(names[i])} presses</button>`).join("")}<span class="sub">Last place can press before teeing off: stakes double from this hole to the end.</span></div>`;
+  const rows = [0, 1, 2, 3].map((i) => `<div class="wfrow"><div class="wfname">${esc(names[i])}${i === w ? ` <span class="wftag">Wolf</span>` : ""}</div>
+      <input id="wfS${i}" class="wfscore" type="number" inputmode="numeric" min="1" max="20" value="${d.scores[i] ?? ""}" placeholder="–" aria-label="${esc(names[i])} score" ${lock}>
+      <div class="wfbon">${WF_BONUS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${d[k].includes(i)}" data-act="wfBonus" data-v="${k}" data-i="${i}" ${lock}>${l}</button>`).join("")}</div></div>`).join("");
+  const hole = `<article class="card wfcard">
+    <div class="slip-top"><span class="cat">Hole ${hn}</span><span class="sub">Wolf: <b>${esc(names[w])}</b></span></div>
+    <span class="lab">Wolf's call</span><div class="wfmodes">${modeBtns}</div><span class="sub">${worth}</span>
+    ${press}
+    <span class="lab">Scores and bonuses</span>${rows}
+    ${saved?.complete ? `<div class="wfresult">${esc(saved.result)} · ${[0, 1, 2, 3].map((i) => esc(names[i]) + " " + signed(saved["d" + i])).join(", ")}</div>` : ""}
+    ${playing ? `<div class="acts"><button class="btn primary" data-act="wfSave">Save hole ${hn}${hn < 18 ? " & next" : ""}</button></div>` : ""}
+  </article>`;
+  // scorecard
+  const card = v.board.filter((x) => x.complete).map((x) => `<tr><td class="num">${x.hole}</td><td>${esc(names[x.wolf])}${x.mode === "lone" ? " (L)" : x.mode === "blind" ? " (B)" : ""}</td>${[0, 1, 2, 3].map((i) => `<td class="num ${tone(x["d" + i])}">${x["d" + i] ? signed(x["d" + i]) : "·"}</td>`).join("")}</tr>`).join("");
+  const scorecard = card ? `<div class="table wfcardtbl"><table><thead><tr><th class="num">#</th><th>Wolf</th>${names.map((n) => `<th class="num">${esc(n.slice(0, 6))}</th>`).join("")}</tr></thead><tbody>${card}</tbody></table></div>` : "";
+  let foot = "";
+  if (playing) {
+    foot = `<div class="acts">${S.wolf.confirm === "finish" ? `<button class="btn primary" data-act="wfFinish">Tap again to finish and book the points</button><button class="btn ghost" data-act="wfNo">Not yet</button>`
+      : `<button class="btn" data-act="wfFinishAsk">Finish round</button>`}
+      ${r.created_by === S.me ? (S.wolf.confirm === "delete" ? `<button class="btn ghost" data-act="wfDelete">Tap again to delete this round</button>` : `<button class="btn quiet" data-act="wfDeleteAsk">Delete round</button>`) : ""}</div>
+      <span class="sub">Finishing books what each pair owes into Standings and Rivals. Any player can do it, and it can't be undone.</span>`;
+  } else foot = `<div class="pksubmit done"><div class="pkdone">Round finished</div><span>Points are in Standings and Rivals.</span></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head}${stakes}${table}${chips}${hole}${scorecard}${foot}</div>`;
+}
+function wfOpen(id) {
+  S.wolf.view = { id, hole: null, board: null, holes: [], draft: null }; S.wolf.confirm = null;
+  render(); loadWolfRound();
+}
+async function wfCreate() {
+  const err = (m) => { const e = $("#wfErr"); if (e) { e.textContent = m; e.hidden = false; } };
+  const players = [];
+  for (let i = 0; i < 4; i++) {
+    const v = $("#wfSel" + i).value;
+    if (!v) return err("Pick all four players.");
+    if (v === "guest") { const n = $("#wfGuest" + i).value.trim(); if (!n) return err("Give every guest a name."); players.push({ name: n }); }
+    else players.push({ uid: v });
+  }
+  const { data, error } = await sb.rpc("create_wolf_round", { p_course: $("#wfCourse").value.trim(), p_players: players });
+  if (error) return err(friendly(error));
+  S.wolf.starting = false; await loadWolf(); wfOpen(data);
+}
+async function wfSave() {
+  const v = S.wolf.view; wfCapture();
+  const d = v.draft, hn = v.hole;
+  if (d.mode === "partner" && d.partner == null) return toast("Pick the Wolf's partner.");
+  const { error } = await sb.rpc("save_wolf_hole", { p_round: v.id, p_hole: hn, p_mode: d.mode, p_partner: d.partner, p_scores: d.scores,
+    p_greenie: d.greenie, p_birdie: d.birdie, p_sandy: d.sandy, p_pressed_by: d.press });
+  if (error) return toast(friendly(error));
+  const complete = d.mode && d.scores.every((x) => x != null);
+  toast(complete ? `Hole ${hn} saved` : `Hole ${hn} saved (not scored until the Wolf's call and all four scores are in)`);
+  if (complete && hn < 18) v.hole = hn + 1;
+  const [b, h] = await Promise.all([sb.rpc("wolf_scoreboard", { p_round: v.id }), sb.from("wolf_holes").select("*").eq("round_id", v.id)]);
+  v.board = b.data || v.board; v.holes = h.data || v.holes;
+  wfDraftFor(v.hole); render();
+}
+async function wfFinish() {
+  const { data, error } = await sb.rpc("finish_wolf_round", { p_round: S.wolf.view.id });
+  if (error) return toast(friendly(error));
+  S.wolf.confirm = null; toast(`Round finished. ${data} result${data === 1 ? "" : "s"} booked.`);
+  await Promise.all([loadWolf(), loadBets()]); loadWolfRound();
+}
+async function wfDelete() {
+  const { error } = await sb.rpc("delete_wolf_round", { p_round: S.wolf.view.id });
+  if (error) return toast(friendly(error));
+  S.wolf.view = null; S.wolf.confirm = null; await loadWolf(); render(); toast("Round deleted.");
+}
+
 function render() {
   renderLedger(); renderBell();
-  for (const t of ["board", "feed", "rivals", "vegas"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
+  for (const t of ["board", "feed", "rivals", "vegas", "golf"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
+  v.innerHTML = S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -1276,6 +1429,24 @@ const ACT = {
   pkWeek: (el) => pkOpen(S.pkView.gid, weekShift(S.pkView.week, +el.dataset.v)),
   pkPick: (el) => pkPick(S.pkView.gid, el.dataset.id, el.dataset.v),
   pkTb: () => pkSaveTb(),
+  wfStart: () => { S.wolf.starting = true; render(); },
+  wfCancel: () => { S.wolf.starting = false; render(); },
+  wfCreate: () => wfCreate(),
+  wfOpen: (el) => wfOpen(el.dataset.id),
+  wfBack: () => { S.wolf.view = null; S.wolf.confirm = null; loadWolf().then(render); render(); },
+  wfHole: (el) => { wfCapture(); wfDraftFor(+el.dataset.v); render(); },
+  wfMode: (el) => { wfCapture(); const d = S.wolf.view.draft, x = el.dataset.v;
+    if (x[0] === "p") { const p = +x.slice(1); if (d.mode === "partner" && d.partner === p) { d.mode = null; d.partner = null; } else { d.mode = "partner"; d.partner = p; } }
+    else if (d.mode === x) d.mode = null; else { d.mode = x; d.partner = null; }
+    render(); },
+  wfBonus: (el) => { wfCapture(); const d = S.wolf.view.draft, k = el.dataset.v, i = +el.dataset.i; d[k] = d[k].includes(i) ? d[k].filter((x) => x !== i) : [...d[k], i]; render(); },
+  wfPress: (el) => { wfCapture(); S.wolf.view.draft.press = el.dataset.v === "" ? null : +el.dataset.v; render(); },
+  wfSave: () => wfSave(),
+  wfFinishAsk: () => { S.wolf.confirm = "finish"; render(); },
+  wfDeleteAsk: () => { S.wolf.confirm = "delete"; render(); },
+  wfNo: () => { S.wolf.confirm = null; render(); },
+  wfFinish: () => wfFinish(),
+  wfDelete: () => wfDelete(),
   pkSubmit: () => pkSubmit(),
   pkBonus: (el) => pkBonus(el.dataset.id),
   pkCrash: (el) => pkCrash(el.dataset.id),
@@ -1445,7 +1616,10 @@ document.addEventListener("input", (e) => {
     if (b && a) a.href = smsHref(n, message(b, S.notify.kind).body);
   }
 });
-document.addEventListener("change", (e) => { if (e.target.id === "proofFile") pickProofFile(e.target); });
+document.addEventListener("change", (e) => {
+  if (e.target.id === "proofFile") pickProofFile(e.target);
+  if (/^wfSel\d$/.test(e.target.id)) { const g = $("#wfGuest" + e.target.id.slice(5)); if (g) { g.hidden = e.target.value !== "guest"; if (!g.hidden) g.focus(); } }
+});
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
   const f = ACT[el.dataset.act]; if (f) { e.preventDefault(); f(el); }
@@ -1699,7 +1873,7 @@ function liveUpdates() {
     .on("postgres_changes", { event: "*", schema: "public", table: "settlements" }, () => { loadSettlements().then(render).catch(() => {}); })
     .on("postgres_changes", { event: "*", schema: "public", table: "settlement_requests" }, () => { loadSettlements().then(render).catch(() => {}); })
     .subscribe();
-  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); await loadSettlements(); await loadPickem().catch(() => {}); if (S.pkView) loadPkWeek(); render(); } catch (e) {} } });
+  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); await loadSettlements(); await loadPickem().catch(() => {}); if (S.pkView) loadPkWeek(); if (S.wolf?.view) loadWolfRound(); render(); } catch (e) {} } });
 }
 
 /* ---------- what's new: activity since your last look ---------- */

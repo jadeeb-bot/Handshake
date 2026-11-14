@@ -91,6 +91,12 @@ Final scores come from the same `vegas-lines` function: it pulls scores only whi
 
 Run `update-pickem.sql` after `update-vegas-lines.sql`, then `update-pickem-2.sql`, then `update-pickem-3.sql`. Redeploy `notify` for the crash-request notifications.
 
+## Golf: Wolf
+
+The **Golf** tab tracks Wolf rounds for a foursome (Handshake people or guests). Players set the tee order; the Wolf rotates and keeps rotating on 17 and 18. Each hole: the Wolf takes a partner (each loser pays each winner 1), goes Lone Wolf (wins 1 from each or pays 1 to each) or Blind Wolf before anyone tees off (2 from/to each). Ties roll 1 point into the next hole. The player in last place can press before a hole: stakes double from there to the end (presses stack). Greenies, Birdies and Sandies are 1 from each other player and never double. Gross scores. Scoring is all in `wolf_compute()`; **Finish round** books what each pair owes as finished predictions (marked `wolf_round`).
+
+Run `update-wolf.sql`.
+
 ## Good to know
 
 - **Sign-in emails have a low limit at first.** Supabase's built-in email sender only allows a few emails an hour, which is fine for testing. Before you invite a whole group, add your own email sender with the **Set up SMTP** button under **Authentication → Emails**. [Resend](https://resend.com) has a free plan that works well.

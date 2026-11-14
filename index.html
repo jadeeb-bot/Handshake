@@ -159,6 +159,26 @@ tr.me td{background:var(--pen-soft)}
 .pkcard th,.pkcard td{padding:10px 8px}
 .pkcard td.pl{min-width:0;gap:8px}
 .pkcard th.pkinh{white-space:normal;text-align:center;line-height:1.2}
+.wfstart select,.wfstart input{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:15px;background:var(--slip);color:var(--ink)}
+.wfslot{display:flex;gap:10px;align-items:flex-start}
+.wfslotin{flex:1;display:flex;flex-direction:column;gap:4px}
+.wfround{cursor:pointer}.wfround h3{margin:0;font-size:17px}
+.wfstakes{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:14px;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:10px 14px}
+.wfholes{display:grid;grid-template-columns:repeat(9,1fr);gap:4px}
+.wfhole{border:1px solid var(--line);background:var(--slip);color:var(--ink);border-radius:8px;padding:7px 0;font:600 13px var(--f-mono);cursor:pointer}
+.wfhole.done{background:color-mix(in srgb,var(--good) 18%,var(--slip));border-color:color-mix(in srgb,var(--good) 45%,transparent)}
+.wfhole.on{outline:2px solid var(--pen);outline-offset:1px}
+.wfcard h3{margin:0}
+.wfmodes{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.wfpress{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:14px}
+.wfpress.on{background:color-mix(in srgb,var(--warn) 18%,var(--slip));border-radius:8px;padding:8px 10px}
+.wfrow{display:grid;grid-template-columns:1fr 64px;gap:6px 10px;align-items:center;border-top:1px dashed var(--line);padding-top:8px}
+.wfname{font-weight:600;font-size:15px}
+.wftag{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--pen);font-weight:700}
+.wfscore{width:64px;border:1px solid var(--line);border-radius:8px;padding:8px;font:600 17px var(--f-mono);text-align:center;background:var(--slip);color:var(--ink)}
+.wfbon{grid-column:1/-1;display:flex;gap:6px;flex-wrap:wrap}
+.wfresult{font-size:14px;background:var(--desk);border-radius:8px;padding:8px 10px}
+.wfcardtbl th,.wfcardtbl td{padding:7px 6px}
 .pkbonus{align-self:flex-start;font-size:13px;padding:4px 0}
 .pkbonus.on{font-weight:700;color:var(--pen)}
 .pkbanner{display:flex;gap:10px;align-items:center;justify-content:space-between;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:10px 14px;font-size:14px}
@@ -384,6 +404,7 @@ a.btn.primary{color:var(--slip)}
         <button role="tab" id="tab-feed" aria-selected="false" data-act="tab" data-v="feed">Everyone <span class="count" id="crashCount" hidden></span></button>
         <button role="tab" id="tab-rivals" aria-selected="false" data-act="tab" data-v="rivals">Rivals</button>
         <button role="tab" id="tab-vegas" aria-selected="false" data-act="tab" data-v="vegas">Vegas</button>
+        <button role="tab" id="tab-golf" aria-selected="false" data-act="tab" data-v="golf">Golf</button>
       </div>
       <button class="btn quiet" data-act="export">Export CSV</button>
     </nav>
