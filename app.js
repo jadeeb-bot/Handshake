@@ -650,7 +650,7 @@ function message(b, kind) {
         const newbie = !b.b?.invited && !b.b?.uid;
         const until = b.shakeBy ? ` You have until ${deadlineText(b.shakeBy)}.` : "";
         body = `${them}, I'm calling it: ${t} for ${st}${due}.${until} ${newbie ? "Sign up on Handshake with this phone number:" : "It's on Handshake:"} ${PAGE_URL} I'll be waiting for you to shake on it.`;
-        return { subject, body, to: them };
+        return { subject, body: hs(body), to: them };
       }
       break;
     case "counter":
@@ -667,7 +667,7 @@ function message(b, kind) {
       const ref = b.referee?.name || "Hey";
       subject = `Handshake: you're the referee on ${t}`;
       body = `${ref}, you've been picked to referee ${nameOf(b, "a")} vs ${nameOf(b, "b")} on ${t}. Look at the proof and pick the winner on Handshake${b.stepBy ? " by " + deadlineText(b.stepBy) : ""}. If no one's picked, it's Hopeless:`;
-      return { subject, body: body + " " + PAGE_URL, to: ref };
+      return { subject, body: hs(body + " " + PAGE_URL), to: ref };
     }
     case "final":
       subject = `Handshake: final on ${t}`;
@@ -685,7 +685,7 @@ const phoneKey = (n) => "hs-phone:" + n.toLowerCase();
 // shows the logo preview card).
 const hs = (t) => {
   let x = String(t).replace(/^🤝\s*/, "").trim();
-  x = x.replace(/\s+(https?:\/\/\S+)$/, "\n\n$1");
+  x = x.replace(/\s*(https?:\/\/\S+)\s*/g, "\n\n$1\n\n").trim();
   x = x.replace(/([.!?])["”’)]?\s+(?=["“(]?[A-Z0-9@$🤝])/g, (m, p) => m.trimEnd() + "\n\n");
   return "🤝 " + x;
 };
