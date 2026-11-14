@@ -842,11 +842,11 @@ function rivalSentence(r) {
 // Opens Venmo with the person (if their handle is saved) and a note filled in; the Shaker types
 // the amount and taps Request / Pay (decided Nov 14: no amount, no points-to-dollars).
 function venmoLink(kind, handle, note) {
-  const q = new URLSearchParams({ txn: kind === "request" ? "charge" : "pay", note: note || "Handshake settle-up" });
-  if (handle) q.set("recipients", handle);
-  const mobile = IN_APP || /iPhone|iPad|iPod|Android/.test(navigator.userAgent);
-  if (!mobile) q.set("audience", "private");
-  return (mobile ? "venmo://paycharge?" : "https://venmo.com/?") + q.toString();
+  const q = new URLSearchParams({ txn: kind === "request" ? "charge" : "pay", note: note || "Handshake settle-up" }).toString();
+  // Venmo's official payment link (venmo.com/paymentlinks): works on the web and opens the app on phones.
+  if (handle) return `https://venmo.com/${encodeURIComponent(handle)}?${q}`;
+  // No saved handle: on a phone, open the app's request/pay screen to pick the person; on a computer, Venmo's site.
+  return IN_APP || /iPhone|iPad|iPod|Android/.test(navigator.userAgent) ? "venmo://paycharge?" + q : "https://venmo.com/";
 }
 function phoneForUid(uid) {
   if (!uid) return "";
