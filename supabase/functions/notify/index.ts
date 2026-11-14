@@ -225,6 +225,23 @@ async function crashNote(admin: Admin, caller: string, body: { pickem_group?: st
   return reply(200, { sent: 0, reason: "nothing new" });
 }
 
+/* ---------- Wolf: tell the other players a round started ---------- */
+async function wolfNote(admin: Admin, caller: string, body: { wolf_round?: string }) {
+  if (!isId(body.wolf_round)) return reply(400, { error: "wolf_round is wrong." });
+  const { data: r } = await admin.from("wolf_rounds").select("course, players, created_by, created_at").eq("id", body.wolf_round).maybeSingle();
+  if (!r) return reply(404, { error: "That round no longer exists." });
+  if (r.created_by !== caller || !recent(r.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
+  const players = (r.players || []) as { uid: string | null; name: string }[];
+  const starter = players.find((p) => p.uid === caller)?.name || "Someone";
+  const to = players.map((p) => p.uid).filter((u): u is string => !!u && u !== caller);
+  const sent = await deliver(admin, to, {
+    title: "Wolf round started",
+    body: `${starter} started a Wolf round${r.course ? " at " + r.course : ""} with you. Open the Golf tab to enter and follow scores live.`,
+    tag: "wolf-" + body.wolf_round,
+  });
+  return reply(200, { sent });
+}
+
 /* ---------- the request ---------- */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -238,10 +255,11 @@ Deno.serve(async (req) => {
   const caller = who.user.id;
   console.log("notify: from", caller, "key type", SERVICE_KEY.startsWith("sb_secret_") ? "secret" : SERVICE_KEY.startsWith("eyJ") ? "legacy service_role" : "unknown");
 
-  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string } = {};
+  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
   if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
   if (body.pickem_group) return await crashNote(admin, caller, body);
+  if (body.wolf_round) return await wolfNote(admin, caller, body);
   const predictionId = String(body.prediction_id ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(predictionId)) return reply(400, { error: "prediction_id is required." });
 

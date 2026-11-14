@@ -95,7 +95,9 @@ Run `update-pickem.sql` after `update-vegas-lines.sql`, then `update-pickem-2.sq
 
 The **Golf** tab tracks Wolf rounds for a foursome (Handshake people or guests). Players set the tee order; the Wolf rotates and keeps rotating on 17 and 18. Each hole: the Wolf takes a partner (each loser pays each winner 1), goes Lone Wolf (wins 1 from each or pays 1 to each) or Blind Wolf before anyone tees off (2 from/to each). Ties roll 1 point into the next hole. The player in last place can press before a hole: stakes double from there to the end (presses stack). Greenies, Birdies and Sandies are 1 from each other player and never double. Gross scores. Scoring is all in `wolf_compute()`; **Finish round** books what each pair owes as finished predictions (marked `wolf_round`).
 
-Run `update-wolf.sql`.
+**Invites and live scoring:** every round has a code (`W` + 6 characters) and link (`?join=CODE`, opens the app too). Opening it puts the person into a guest's spot (`wolf_round_preview()`, `join_wolf_round()`). Handshake players picked at the start get a "Wolf round started" notification (notify `{wolf_round}`). Rounds and holes are in Supabase Realtime, so every player's screen updates when anyone saves a hole.
+
+Run `update-wolf.sql`, then `update-wolf-2.sql`, and redeploy `notify`.
 
 ## Good to know
 

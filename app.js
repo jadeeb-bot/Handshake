@@ -1177,6 +1177,7 @@ async function pkCreate() {
 async function pkJoin(code) {
   code = String(code || "").trim().toUpperCase();
   if (!code) return toast("Type the invite code first.");
+  if (/^W[0-9A-F]{6}$/.test(code)) return wfJoin(code);
   const { data, error } = await sb.rpc("join_pickem_group", { p_code: code });
   if (error) return toast(friendly(error));
   await loadPickem(); S.tab = "feed";
@@ -1259,13 +1260,21 @@ function renderGolf() {
       <p class="err" id="wfErr" hidden></p>
       <div class="acts"><button class="btn primary" data-act="wfCreate">Tee it up</button><button class="btn ghost" data-act="wfCancel">Cancel</button></div></div>`;
   }
+  const cl = S.wolf.claim;
+  const claim = cl ? `<div class="card"><span class="lab">Join ${esc(cl.course || "this Wolf round")}</span><h3 style="margin:0">Which one are you?</h3>
+    <div class="acts">${cl.guest_slots.map((i) => `<button class="btn primary" data-act="wfClaim" data-v="${i}">${esc(cl.names[i])}</button>`).join("")}<button class="btn ghost" data-act="wfClaimNo">Cancel</button></div>
+    <span class="sub">You'll take that guest's spot and see the round live.</span></div>` : "";
   const rounds = S.wolf.rounds.map((r) => `<article class="card wfround" data-act="wfOpen" data-id="${r.id}">
       <div class="slip-top"><span class="cat">Wolf</span><span class="sub">${esc(new Date(r.created_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }))} · ${r.status === "finished" ? "Finished" : "<b>In progress</b>"}</span></div>
       <h3>${esc(r.course || "Wolf round")}</h3><span class="sub">${esc(wfNames(r).join(" · "))}</span></article>`).join("");
   return `<div style="display:flex;flex-direction:column;gap:14px">
     <div class="secthead"><h2>Golf</h2>${S.wolf.starting ? "" : `<button class="btn quiet" data-act="wfStart">Start a Wolf round</button>`}</div>
     <span class="sub">Wolf for a foursome: take a partner, go Lone Wolf (win 3 or pay 1 each) or Blind Wolf before anyone tees off (win 6 or pay 2 each). Ties roll a point over. Last place can press to double the stakes from there on. Greenies, Birdies and Sandies are 1 from each player. When you finish, points go into Standings and Rivals.</span>
-    ${form}${rounds ? `<div class="cards">${rounds}</div>` : S.wolf.starting ? "" : `<div class="empty"><p>No rounds yet.</p></div>`}</div>`;
+    ${claim}${form}${rounds ? `<div class="cards">${rounds}</div>` : S.wolf.starting ? "" : `<div class="empty"><p>No rounds yet.</p></div>`}
+    <div class="pkjoin"><input id="wfCode" maxlength="7" placeholder="Round code" autocomplete="off" autocapitalize="characters" aria-label="Round code"><button class="btn" data-act="wfJoinCode">Join round</button></div></div>`;
+}
+function wfInviteText(r) {
+  return `Join my Wolf round${r.course ? " at " + r.course : ""} on Handshake so you can enter and follow scores live. Tap: ${PAGE_URL}?join=${r.code} (or enter code ${r.code} on the Golf tab).`;
 }
 function renderWolfRound() {
   const v = S.wolf.view, r = wfRound(v.id);
@@ -1320,11 +1329,63 @@ function renderWolfRound() {
       ${r.created_by === S.me ? (S.wolf.confirm === "delete" ? `<button class="btn ghost" data-act="wfDelete">Tap again to delete this round</button>` : `<button class="btn quiet" data-act="wfDeleteAsk">Delete round</button>`) : ""}</div>
       <span class="sub">Finishing books what each pair owes into Standings and Rivals. Any player can do it, and it can't be undone.</span>`;
   } else foot = `<div class="pksubmit done"><div class="pkdone">Round finished</div><span>Points are in Standings and Rivals.</span></div>`;
-  return `<div style="display:flex;flex-direction:column;gap:14px">${head}${stakes}${table}${chips}${hole}${scorecard}${foot}</div>`;
+  const guests = r.players.filter((p) => !p.uid).map((p) => p.name);
+  let invite = "";
+  if (playing && r.code) {
+    invite = `<div class="wfinvite"><span>${guests.length ? `<b>${esc(listNames(guests))}</b> ${guests.length === 1 ? "is a guest" : "are guests"}. Invite them to score on their own phones.` : "Everyone's on Handshake. Scores update live on all four phones."}</span><button class="btn ${guests.length ? "primary" : "ghost"}" data-act="wfInvite">${S.wolf.inviting ? "Hide invite" : "Invite players"}</button></div>`;
+    if (S.wolf.inviting) {
+      const text = wfInviteText(r);
+      invite += `<div class="cpanel"><span class="lab">Round code <b class="mono">${esc(r.code)}</b></span><p class="msg">${esc(text)}</p>
+        <div class="acts"><button class="btn primary" data-act="wfCopyInvite">Copy invite</button><a class="btn" href="${esc(smsHref("", text))}">Open Messages</a></div>
+        <span class="sub">Opening the link puts them in a guest's spot. It opens the Handshake app if they have it.</span></div>`;
+    }
+  }
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head}${stakes}${table}${invite}${chips}${hole}${scorecard}${foot}</div>`;
 }
 function wfOpen(id) {
-  S.wolf.view = { id, hole: null, board: null, holes: [], draft: null }; S.wolf.confirm = null;
-  render(); loadWolfRound();
+  wfUnsub();
+  S.wolf.view = { id, hole: null, board: null, holes: [], draft: null, dirty: false }; S.wolf.confirm = null; S.wolf.inviting = false;
+  render(); loadWolfRound(); wfSub(id);
+}
+/* live scoring: every player's screen refreshes when anyone saves */
+let wfChan = null, wfLiveT = null;
+function wfSub(id) {
+  try {
+    wfChan = sb.channel("wolf-" + id)
+      .on("postgres_changes", { event: "*", schema: "public", table: "wolf_holes", filter: "round_id=eq." + id }, (e) => wfLive(e?.new?.hole ?? e?.old?.hole))
+      .on("postgres_changes", { event: "*", schema: "public", table: "wolf_rounds", filter: "id=eq." + id }, () => wfLive(null))
+      .subscribe();
+  } catch (e) { wfChan = null; }
+}
+function wfUnsub() { if (wfChan) { try { sb.removeChannel(wfChan); } catch (e) {} wfChan = null; } }
+function wfLive(hole) {
+  clearTimeout(wfLiveT);
+  wfLiveT = setTimeout(async () => {
+    const v = S.wolf?.view; if (!v || S.tab !== "golf") return;
+    wfCapture();
+    const [b, h] = await Promise.all([sb.rpc("wolf_scoreboard", { p_round: v.id }), sb.from("wolf_holes").select("*").eq("round_id", v.id), loadWolf()]);
+    if (b.error) return;
+    v.board = b.data || v.board; v.holes = h.data || v.holes;
+    if (!v.dirty) wfDraftFor(v.hole);
+    else if (hole === v.hole) toast(`Someone else just saved hole ${hole}. Your changes are still here; save to keep them.`);
+    render();
+  }, 250);
+}
+async function wfJoin(code) {
+  const { data, error } = await sb.rpc("wolf_round_preview", { p_code: code });
+  const pv = data?.[0];
+  if (error || !pv) return toast(error ? friendly(error) : "That round code doesn't match any round.");
+  S.tab = "golf"; if (!S.wolf) await loadWolf();
+  if (pv.is_player) { await loadWolf(); return wfOpen(pv.round_id); }
+  if (pv.finished) return toast("That round is already finished.");
+  if (!pv.guest_slots.length) return toast("All four spots in that round are taken.");
+  if (pv.guest_slots.length === 1) return wfClaim(code, pv.guest_slots[0]);
+  S.wolf.claim = { code, ...pv }; S.wolf.view = null; render();
+}
+async function wfClaim(code, slot) {
+  const { data, error } = await sb.rpc("join_wolf_round", { p_code: code, p_slot: slot });
+  if (error) return toast(friendly(error));
+  S.wolf.claim = null; await loadWolf(); toast("You're in. Scores update live."); wfOpen(data);
 }
 async function wfCreate() {
   const err = (m) => { const e = $("#wfErr"); if (e) { e.textContent = m; e.hidden = false; } };
@@ -1337,7 +1398,10 @@ async function wfCreate() {
   }
   const { data, error } = await sb.rpc("create_wolf_round", { p_course: $("#wfCourse").value.trim(), p_players: players });
   if (error) return err(friendly(error));
-  S.wolf.starting = false; await loadWolf(); wfOpen(data);
+  S.wolf.starting = false; await loadWolf();
+  if (players.some((p) => p.uid && p.uid !== S.me)) notifyQuiet({ wolf_round: data });
+  wfOpen(data);
+  if (players.some((p) => !p.uid)) S.wolf.inviting = true;
 }
 async function wfSave() {
   const v = S.wolf.view; wfCapture();
@@ -1348,6 +1412,7 @@ async function wfSave() {
   if (error) return toast(friendly(error));
   const complete = d.mode && d.scores.every((x) => x != null);
   toast(complete ? `Hole ${hn} saved` : `Hole ${hn} saved (not scored until the Wolf's call and all four scores are in)`);
+  v.dirty = false;
   if (complete && hn < 18) v.hole = hn + 1;
   const [b, h] = await Promise.all([sb.rpc("wolf_scoreboard", { p_round: v.id }), sb.from("wolf_holes").select("*").eq("round_id", v.id)]);
   v.board = b.data || v.board; v.holes = h.data || v.holes;
@@ -1414,7 +1479,7 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  tab: (el) => { if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
   vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
   pkGo: () => { S.tab = "feed"; S.pkView = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
   pkName: () => { S.pkNaming = true; render(); setTimeout(() => $("#pkName")?.focus(), 30); },
@@ -1433,14 +1498,19 @@ const ACT = {
   wfCancel: () => { S.wolf.starting = false; render(); },
   wfCreate: () => wfCreate(),
   wfOpen: (el) => wfOpen(el.dataset.id),
-  wfBack: () => { S.wolf.view = null; S.wolf.confirm = null; loadWolf().then(render); render(); },
-  wfHole: (el) => { wfCapture(); wfDraftFor(+el.dataset.v); render(); },
-  wfMode: (el) => { wfCapture(); const d = S.wolf.view.draft, x = el.dataset.v;
+  wfBack: () => { wfUnsub(); S.wolf.view = null; S.wolf.confirm = null; loadWolf().then(render); render(); },
+  wfInvite: () => { S.wolf.inviting = !S.wolf.inviting; render(); },
+  wfCopyInvite: () => copy(wfInviteText(wfRound(S.wolf.view.id)), "Invite copied. Paste it into your group text."),
+  wfJoinCode: () => wfJoin(($("#wfCode")?.value || "").trim().toUpperCase()),
+  wfClaim: (el) => wfClaim(S.wolf.claim.code, +el.dataset.v),
+  wfClaimNo: () => { S.wolf.claim = null; render(); },
+  wfHole: (el) => { wfCapture(); S.wolf.view.dirty = false; wfDraftFor(+el.dataset.v); render(); },
+  wfMode: (el) => { wfCapture(); S.wolf.view.dirty = true; const d = S.wolf.view.draft, x = el.dataset.v;
     if (x[0] === "p") { const p = +x.slice(1); if (d.mode === "partner" && d.partner === p) { d.mode = null; d.partner = null; } else { d.mode = "partner"; d.partner = p; } }
     else if (d.mode === x) d.mode = null; else { d.mode = x; d.partner = null; }
     render(); },
-  wfBonus: (el) => { wfCapture(); const d = S.wolf.view.draft, k = el.dataset.v, i = +el.dataset.i; d[k] = d[k].includes(i) ? d[k].filter((x) => x !== i) : [...d[k], i]; render(); },
-  wfPress: (el) => { wfCapture(); S.wolf.view.draft.press = el.dataset.v === "" ? null : +el.dataset.v; render(); },
+  wfBonus: (el) => { wfCapture(); S.wolf.view.dirty = true; const d = S.wolf.view.draft, k = el.dataset.v, i = +el.dataset.i; d[k] = d[k].includes(i) ? d[k].filter((x) => x !== i) : [...d[k], i]; render(); },
+  wfPress: (el) => { wfCapture(); S.wolf.view.dirty = true; S.wolf.view.draft.press = el.dataset.v === "" ? null : +el.dataset.v; render(); },
   wfSave: () => wfSave(),
   wfFinishAsk: () => { S.wolf.confirm = "finish"; render(); },
   wfDeleteAsk: () => { S.wolf.confirm = "delete"; render(); },
@@ -1604,6 +1674,7 @@ const ACT = {
   },
 };
 document.addEventListener("input", (e) => {
+  if (/^wfS\d$/.test(e.target.id) && S.wolf?.view) S.wolf.view.dirty = true;
   if (e.target.id === "crashPts") S.crashDraft.pts = e.target.value;
   if (e.target.id === "cPts") S.counterDraft.pts = e.target.value;
   if (e.target.id === "cText") S.counterDraft.text = e.target.value;
