@@ -93,11 +93,13 @@ Run `update-pickem.sql` after `update-vegas-lines.sql`, then `update-pickem-2.sq
 
 ## Golf: Wolf
 
-The **Golf** tab tracks Wolf rounds for a foursome (Handshake people or guests). Players set the tee order; the Wolf rotates and keeps rotating on 17 and 18. Each hole: the Wolf takes a partner (each loser pays each winner 1), goes Lone Wolf (wins 1 from each or pays 1 to each) or Blind Wolf before anyone tees off (2 from/to each). Ties roll 1 point into the next hole. The player in last place can press before a hole: stakes double from there to the end (presses stack). Greenies, Birdies and Sandies are 1 from each other player and never double. Gross scores. Scoring is all in `wolf_compute()`. **End match** (any time, 18 holes or fewer) closes the round and shows who pays whom, net of all offsets, in the fewest payments. Golf results stay in the round: nothing goes into Standings or Rivals.
+The **Golf** tab tracks Wolf rounds for a foursome (Handshake people or guests). The Wolf rotates in tee order and keeps rotating on 17 and 18. Each hole: the Wolf takes a partner (each loser pays each winner 1), goes Lone Wolf (wins 1 from each or pays 1 to each) or Blind Wolf before anyone tees off (2 from/to each). Ties roll 1 point into the next hole. The player in last place can press before a hole: stakes double from there to the end (presses stack). Greenies, Birdies and Sandies are 1 from each other player and never double. Gross scores. Scoring is all in `wolf_compute()`. **End match** (any time, 18 holes or fewer) closes the round and shows who pays whom, net of all offsets, in the fewest payments. Golf results stay in the round: nothing goes into Standings or Rivals.
 
 **Invites and live scoring:** every round has a code (`W` + 6 characters) and link (`?join=CODE`, opens the app too). Opening it puts the person into a guest's spot (`wolf_round_preview()`, `join_wolf_round()`). Handshake players picked at the start get a "Wolf round started" notification (notify `{wolf_round}`). Rounds and holes are in Supabase Realtime, so every player's screen updates when anyone saves a hole.
 
-Run `update-wolf.sql`, then `update-wolf-2.sql`, then `update-wolf-3.sql`, and redeploy `notify`.
+**Tee order:** players are entered in any order, then the tee order is set with 🎲 Random order or ↑/↓. Any player can change it on the round (`reorder_wolf_round()`) until the first hole is saved.
+
+Run `update-wolf.sql`, `update-wolf-2.sql`, `update-wolf-3.sql`, then `update-wolf-4.sql`, and redeploy `notify`.
 
 ## Good to know
 

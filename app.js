@@ -1245,18 +1245,35 @@ function wfTotals(board, beforeHole) {
   for (const x of board) if (beforeHole == null || x.hole < beforeHole) { t[0] += x.d0; t[1] += x.d1; t[2] += x.d2; t[3] += x.d3; }
   return t;
 }
+function wfOrderList(names, prefix) {
+  const holesFor = (pos) => [1, 2, 3, 4, 5].map((k) => pos + 1 + 4 * (k - 1)).filter((x) => x <= 18).join(", ");
+  return `<ol class="wforder">${names.map((n, k) => `<li><span class="rk">${k + 1}</span><span class="wfon"><b>${esc(n)}</b><span class="sub">Wolf on ${holesFor(k)}</span></span>
+    <span class="wfarrows"><button class="btn ghost" data-act="${prefix}Up" data-v="${k}" ${k === 0 ? "disabled" : ""} aria-label="Move ${esc(n)} up">↑</button><button class="btn ghost" data-act="${prefix}Down" data-v="${k}" ${k === 3 ? "disabled" : ""} aria-label="Move ${esc(n)} down">↓</button></span></li>`).join("")}</ol>`;
+}
+const wfShuffled = (a) => { const b = [...a]; for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
+const wfMove = (arr, k, dir) => { const b = [...arr], j = k + dir; if (j < 0 || j > 3) return b; [b[k], b[j]] = [b[j], b[k]]; return b; };
+function wfFormCapture() {
+  const f = S.wolf?.form; if (!f || !$("#wfSel0")) return;
+  for (let i = 0; i < 4; i++) { f.sel[i] = $("#wfSel" + i).value; f.guest[i] = $("#wfGuest" + i).value.trim(); }
+  f.course = $("#wfCourse").value;
+}
 function renderGolf() {
   if (!S.wolf) { loadWolf().then(render).catch(() => {}); return `<div class="empty"><p>Loading…</p></div>`; }
   if (S.wolf.off) return `<div class="empty"><h3>Golf isn't switched on yet</h3><p>Run update-wolf.sql in Supabase.</p></div>`;
   if (S.wolf.view) return renderWolfRound();
   let form = "";
   if (S.wolf.starting) {
-    const opts = (sel) => [`<option value="">Pick a player…</option>`, ...S.people.map((p) => `<option value="${p.id}" ${sel === p.id ? "selected" : ""}>${esc(p.name)}${p.id === S.me ? " (you)" : ""}</option>`), `<option value="guest">Guest (not on Handshake)</option>`].join("");
-    const holesFor = (i) => [1, 2, 3, 4, 5].map((k) => i + 1 + 4 * (k - 1)).filter((x) => x <= 18).join(", ");
-    form = `<div class="card wfstart"><div class="field"><label for="wfCourse">Course (optional)</label><input id="wfCourse" maxlength="40" placeholder="Torrey Pines South" autocomplete="off"></div>
-      <span class="lab">Tee order</span><span class="sub">The Wolf rotates in this order and keeps going on 17 and 18.</span>
-      ${[0, 1, 2, 3].map((i) => `<div class="wfslot"><span class="rk">${i + 1}</span><div class="wfslotin"><select id="wfSel${i}" aria-label="Player ${i + 1}">${opts(i === 0 ? S.me : "")}</select>
-        <input id="wfGuest${i}" maxlength="30" placeholder="Guest's name" hidden autocomplete="off"><span class="sub">Wolf on ${holesFor(i)}</span></div></div>`).join("")}
+    const f = S.wolf.form;
+    const opts = (sel) => [`<option value="">Pick a player…</option>`, ...S.people.map((p) => `<option value="${p.id}" ${sel === p.id ? "selected" : ""}>${esc(p.name)}${p.id === S.me ? " (you)" : ""}</option>`), `<option value="guest" ${sel === "guest" ? "selected" : ""}>Guest (not on Handshake)</option>`].join("");
+    const holesFor = (pos) => [1, 2, 3, 4, 5].map((k) => pos + 1 + 4 * (k - 1)).filter((x) => x <= 18).join(", ");
+    const who = (i) => f.sel[i] === "guest" ? (f.guest[i] || `Guest ${i + 1}`) : f.sel[i] ? personName(f.sel[i]) || "Player" : `Player ${i + 1} (not picked)`;
+    form = `<div class="card wfstart"><div class="field"><label for="wfCourse">Course (optional)</label><input id="wfCourse" maxlength="40" placeholder="Torrey Pines South" autocomplete="off" value="${esc(f.course)}"></div>
+      <span class="lab">Who's playing</span><span class="sub">Any order. You'll set the tee order next.</span>
+      ${[0, 1, 2, 3].map((i) => `<div class="wfslotin"><select id="wfSel${i}" aria-label="Player ${i + 1}">${opts(f.sel[i])}</select>
+        <input id="wfGuest${i}" maxlength="30" placeholder="Guest's name" ${f.sel[i] === "guest" ? "" : "hidden"} autocomplete="off" value="${esc(f.guest[i])}"></div>`).join("")}
+      <div class="wforderhead"><span class="lab">Tee order</span><button class="btn ghost" data-act="wfShuffle">🎲 Random order</button></div>
+      <span class="sub">The Wolf rotates in this order and keeps going on 17 and 18. Use the arrows to move someone.</span>
+      ${wfOrderList(f.order.map(who), "wf")}
       <p class="err" id="wfErr" hidden></p>
       <div class="acts"><button class="btn primary" data-act="wfCreate">Tee it up</button><button class="btn ghost" data-act="wfCancel">Cancel</button></div></div>`;
   }
@@ -1361,11 +1378,19 @@ function renderWolfRound() {
         <span class="sub">Opening the link puts them in a guest's spot. It opens the Handshake app if they have it.</span></div>`;
     }
   }
-  return `<div style="display:flex;flex-direction:column;gap:14px">${head}${stakes}${table}${invite}${chips}${hole}${scorecard}${foot}</div>`;
+  let reorder = "";
+  if (playing && !v.holes.length) {
+    reorder = S.wolf.reorder
+      ? `<div class="card wfstart"><div class="wforderhead"><span class="lab">Change tee order</span><button class="btn ghost" data-act="wfRoShuffle">🎲 Random order</button></div>
+          ${wfOrderList(S.wolf.reorder.map((i) => names[i]), "wfRo")}
+          <div class="acts"><button class="btn primary" data-act="wfReorderSave">Save order</button><button class="btn ghost" data-act="wfReorderNo">Cancel</button></div></div>`
+      : `<div class="wfinvite"><span>Tee order: <b>${esc(names.join(", "))}</b>. You can change it until the first hole is saved.</span><button class="btn ghost" data-act="wfReorderAsk">Change tee order</button></div>`;
+  }
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head}${stakes}${table}${reorder}${invite}${chips}${hole}${scorecard}${foot}</div>`;
 }
 function wfOpen(id) {
   wfUnsub();
-  S.wolf.view = { id, hole: null, board: null, holes: [], draft: null, dirty: false }; S.wolf.confirm = null; S.wolf.inviting = false;
+  S.wolf.view = { id, hole: null, board: null, holes: [], draft: null, dirty: false }; S.wolf.confirm = null; S.wolf.inviting = false; S.wolf.reorder = null;
   render(); loadWolfRound(); wfSub(id);
 }
 /* live scoring: every player's screen refreshes when anyone saves */
@@ -1410,14 +1435,14 @@ async function wfClaim(code, slot) {
 }
 async function wfCreate() {
   const err = (m) => { const e = $("#wfErr"); if (e) { e.textContent = m; e.hidden = false; } };
-  const players = [];
-  for (let i = 0; i < 4; i++) {
-    const v = $("#wfSel" + i).value;
-    if (!v) return err("Pick all four players.");
-    if (v === "guest") { const n = $("#wfGuest" + i).value.trim(); if (!n) return err("Give every guest a name."); players.push({ name: n }); }
-    else players.push({ uid: v });
+  wfFormCapture();
+  const f = S.wolf.form, players = [];
+  for (const i of f.order) {
+    if (!f.sel[i]) return err("Pick all four players.");
+    if (f.sel[i] === "guest") { if (!f.guest[i]) return err("Give every guest a name."); players.push({ name: f.guest[i] }); }
+    else players.push({ uid: f.sel[i] });
   }
-  const { data, error } = await sb.rpc("create_wolf_round", { p_course: $("#wfCourse").value.trim(), p_players: players });
+  const { data, error } = await sb.rpc("create_wolf_round", { p_course: f.course.trim(), p_players: players });
   if (error) return err(friendly(error));
   S.wolf.starting = false; await loadWolf();
   if (players.some((p) => p.uid && p.uid !== S.me)) notifyQuiet({ wolf_round: data });
@@ -1438,6 +1463,12 @@ async function wfSave() {
   const [b, h] = await Promise.all([sb.rpc("wolf_scoreboard", { p_round: v.id }), sb.from("wolf_holes").select("*").eq("round_id", v.id)]);
   v.board = b.data || v.board; v.holes = h.data || v.holes;
   wfDraftFor(v.hole); render();
+}
+async function wfReorderSave() {
+  const v = S.wolf.view;
+  const { error } = await sb.rpc("reorder_wolf_round", { p_round: v.id, p_order: S.wolf.reorder });
+  if (error) return toast(friendly(error));
+  S.wolf.reorder = null; await loadWolf(); wfDraftFor(v.hole); render(); toast("Tee order saved.");
 }
 async function wfFinish() {
   const { data, error } = await sb.rpc("finish_wolf_round", { p_round: S.wolf.view.id });
@@ -1515,7 +1546,16 @@ const ACT = {
   pkWeek: (el) => pkOpen(S.pkView.gid, weekShift(S.pkView.week, +el.dataset.v)),
   pkPick: (el) => pkPick(S.pkView.gid, el.dataset.id, el.dataset.v),
   pkTb: () => pkSaveTb(),
-  wfStart: () => { S.wolf.starting = true; render(); },
+  wfStart: () => { S.wolf.starting = true; S.wolf.form = { course: "", sel: [S.me, "", "", ""], guest: ["", "", "", ""], order: [0, 1, 2, 3] }; render(); },
+  wfShuffle: () => { wfFormCapture(); S.wolf.form.order = wfShuffled(S.wolf.form.order); render(); },
+  wfUp: (el) => { wfFormCapture(); S.wolf.form.order = wfMove(S.wolf.form.order, +el.dataset.v, -1); render(); },
+  wfDown: (el) => { wfFormCapture(); S.wolf.form.order = wfMove(S.wolf.form.order, +el.dataset.v, 1); render(); },
+  wfReorderAsk: () => { S.wolf.reorder = [0, 1, 2, 3]; render(); },
+  wfReorderNo: () => { S.wolf.reorder = null; render(); },
+  wfRoShuffle: () => { S.wolf.reorder = wfShuffled(S.wolf.reorder); render(); },
+  wfRoUp: (el) => { S.wolf.reorder = wfMove(S.wolf.reorder, +el.dataset.v, -1); render(); },
+  wfRoDown: (el) => { S.wolf.reorder = wfMove(S.wolf.reorder, +el.dataset.v, 1); render(); },
+  wfReorderSave: () => wfReorderSave(),
   wfCancel: () => { S.wolf.starting = false; render(); },
   wfCreate: () => wfCreate(),
   wfOpen: (el) => wfOpen(el.dataset.id),
@@ -1710,7 +1750,8 @@ document.addEventListener("input", (e) => {
 });
 document.addEventListener("change", (e) => {
   if (e.target.id === "proofFile") pickProofFile(e.target);
-  if (/^wfSel\d$/.test(e.target.id)) { const g = $("#wfGuest" + e.target.id.slice(5)); if (g) { g.hidden = e.target.value !== "guest"; if (!g.hidden) g.focus(); } }
+  if (/^wfSel\d$/.test(e.target.id)) { const i = e.target.id.slice(5); wfFormCapture(); render(); const g = $("#wfGuest" + i); if (g && !g.hidden && !g.value) g.focus(); }
+  if (/^wfGuest\d$/.test(e.target.id)) { wfFormCapture(); render(); }
 });
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-act]"); if (!el) return;
