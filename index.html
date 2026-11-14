@@ -74,10 +74,14 @@ button{cursor:pointer}
 .pos{color:var(--good)}.neg{color:var(--stamp)}
 @media (max-width:520px){.ledger{grid-template-columns:1fr 1fr}.ledger>div:last-child{grid-column:1/-1;border-left:0;border-top:1px dashed var(--line);flex-direction:row;align-items:baseline;gap:10px}}
 
-.bar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.tabs{display:flex;gap:2px;background:var(--chip);border-radius:9px;padding:3px;overflow-x:auto;scrollbar-width:none;max-width:100%;-webkit-overflow-scrolling:touch}
-.tabs::-webkit-scrollbar{display:none}
-.tabs button{flex:0 0 auto;white-space:nowrap}
+.bar{display:flex;flex-direction:column;gap:6px}
+.barfoot{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.quantobtn{flex:1;border:1px solid var(--line);background:var(--slip);color:var(--ink);border-radius:9px;padding:9px 14px;font:700 15px var(--f-display);display:flex;align-items:baseline;justify-content:center;gap:8px;cursor:pointer}
+.quantobtn[aria-selected="true"]{outline:2px solid var(--pen);outline-offset:1px}
+.quantobtn .sub{font:500 13px var(--f-body)}
+.tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;background:var(--chip);border-radius:9px;padding:3px}
+.tabs.tabs4{grid-template-columns:repeat(4,1fr)}
+.tabs button{white-space:nowrap;justify-content:center}
 .tabs button{border:0;background:transparent;padding:6px 12px;border-radius:7px;font-size:14px;font-weight:500;color:var(--muted);display:flex;gap:6px;align-items:center}
 .tabs button[aria-selected="true"]{background:var(--slip);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 .count{font-family:var(--f-mono);font-size:11px;background:var(--stamp);color:var(--slip);border-radius:9px;padding:0 6px;line-height:17px}
@@ -201,6 +205,12 @@ tr.me td{background:var(--pen-soft)}
 .rvlabels{font-size:12px;color:var(--muted);margin-bottom:-4px}
 .rvphone{display:grid;grid-template-columns:1fr 1.3fr auto;gap:6px;align-items:center}
 .rvphone input{width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;background:var(--slip);color:var(--ink)}
+.vmask{display:flex;flex-direction:column;gap:8px;border:1px solid color-mix(in srgb,var(--pen) 40%,transparent);background:color-mix(in srgb,var(--pen) 8%,var(--slip));border-radius:12px;padding:12px 14px;font-size:14px}
+.vmfield{display:flex;flex-direction:column;gap:4px}
+.vmfield input{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:15px;background:var(--slip);color:var(--ink);max-width:260px}
+.qrow{display:flex;flex-direction:column;gap:8px}
+.qtop{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.qamt{font:700 20px var(--f-mono)}
 .rvcal{display:flex;flex-direction:column;gap:6px;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:12px 14px}
 .rvpeople{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:15px}
 .rvpeople label,.rvradio label{display:flex;gap:6px;align-items:center}
@@ -434,16 +444,21 @@ a.btn.primary{color:var(--slip)}
     </section>
 
     <nav class="bar">
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" aria-label="Views">
         <button role="tab" id="tab-board" aria-selected="true" data-act="tab" data-v="board">Mine <span class="count" id="needCount" hidden></span></button>
         <button role="tab" id="tab-feed" aria-selected="false" data-act="tab" data-v="feed">Everyone <span class="count" id="crashCount" hidden></span></button>
         <button role="tab" id="tab-rivals" aria-selected="false" data-act="tab" data-v="rivals">Rivals</button>
-        <button role="tab" id="tab-vegas" aria-selected="false" data-act="tab" data-v="vegas">Vegas</button>
+      </div>
+      <div class="tabs tabs4" role="tablist" aria-label="Games and plans">
         <button role="tab" id="tab-golf" aria-selected="false" data-act="tab" data-v="golf">Golf</button>
         <button role="tab" id="tab-rsvp" aria-selected="false" data-act="tab" data-v="rsvp">RSVP</button>
         <button role="tab" id="tab-contest" aria-selected="false" data-act="tab" data-v="contest">Contests</button>
+        <button role="tab" id="tab-vegas" aria-selected="false" data-act="tab" data-v="vegas">Vegas</button>
       </div>
-      <button class="btn quiet" data-act="export">Export CSV</button>
+      <div class="barfoot">
+        <button class="quantobtn" id="tab-quanto" aria-selected="false" data-act="tab" data-v="quanto">Quanto <span class="sub" id="quantoSub"></span></button>
+        <button class="btn quiet" data-act="export">Export CSV</button>
+      </div>
     </nav>
 
     <main id="view" aria-live="polite">

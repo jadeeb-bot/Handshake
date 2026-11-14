@@ -134,6 +134,7 @@ async function settleNote(admin: Admin, caller: string, body: { settlement_reque
   const nameOf = async (id: string) =>
     ((await admin.from("profiles").select("name").eq("id", id).maybeSingle()).data?.name as string) || "Your rival";
   const tag = "settle-" + (body.settlement_request_id ?? body.settlement_id);
+  const venmo = (h?: string | null) => (h ? ` Venmo: @${h} (venmo.com/u/${h})` : "");
 
   // The player who's up cleared the balance directly: tell the other side.
   if (body.settlement_id) {
@@ -143,7 +144,7 @@ async function settleNote(admin: Admin, caller: string, body: { settlement_reque
     if (!s.other_uid || !recent(s.created_at)) return reply(200, { sent: 0 });
     const sent = await deliver(admin, [s.other_uid], {
       title: "Settled up",
-      body: `${await nameOf(caller)} settled up: ${ptsText(s.points)} cleared. Your balance is back to zero. The all-time record stays.`,
+      body: `${await nameOf(caller)} settled up: ${ptsText(s.points)} cleared. Your balance is back to zero. The all-time record stays.${venmo(s.venmo)}`,
       tag,
     });
     return reply(200, { sent });
@@ -173,7 +174,7 @@ async function settleNote(admin: Admin, caller: string, body: { settlement_reque
   if (caller === q.requester_uid && q.status === "pending" && recent(q.created_at)) {
     const sent = await deliver(admin, [q.creditor_uid], {
       title: "Settle up?",
-      body: `${down} says you're settled up on ${ptsText(q.points)}. You have 24 hours to confirm or dispute it. After that, it counts.`,
+      body: `${down} says you're settled up on ${ptsText(q.points)}. You have 24 hours to confirm or dispute it. After that, it counts.${venmo(q.venmo)}`,
       tag,
     });
     return reply(200, { sent });

@@ -744,6 +744,31 @@ function myContestsBox() {
       <div class="slip-top"><span class="cat">Contest</span><span class="sub">${c.sponsor === S.me ? "You're sponsoring" : "From " + esc(personName(c.sponsor) || "a friend")} · ${mine ? `you have ${mine} entr${mine === 1 ? "y" : "ies"}` : "no entries from you"} · pot ${n * c.points}</span></div>
       <h3>${esc(c.title)}</h3>${need ? `<span class="ctneed">${esc(need)}</span>` : ""}<span class="sub">${ctStageLine(c)}</span></article>`).join("")}</div></div>`;
 }
+/* ---------- Quanto: who owes whom right now ---------- */
+function renderQuanto() {
+  const rs = rivals().filter((r) => r.current || r.pendingReq);
+  const owed = rs.filter((r) => r.current > 0).reduce((t, r) => t + r.current, 0), owe = rs.filter((r) => r.current < 0).reduce((t, r) => t - r.current, 0);
+  const head = `<div class="secthead"><h2>Quanto</h2><span class="sub">What's outstanding with each person right now</span></div>
+    <div class="wfstakes"><span>Owed to you <b class="pos">${pts(owed)}</b></span><span>You owe <b class="neg">${pts(owe)}</b></span><span>Net <b class="${tone(owed - owe)}">${signed(owed - owe)}</b></span></div>`;
+  if (!rs.length) return `<div style="display:flex;flex-direction:column;gap:14px">${venmoAskBox()}${head}<div class="empty"><h3>All square</h3><p>Nobody owes anybody right now. Golf matches settle on their own scorecards.</p></div></div>`;
+  rs.sort((a, b) => b.current - a.current);
+  const rows = rs.map((r) => {
+    const h = r.uid && S.rivalVenmo?.get(r.uid);
+    const pay = r.current < 0 && h ? `<a class="btn ghost" href="https://venmo.com/u/${encodeURIComponent(h)}" target="_blank" rel="noopener">Pay @${esc(h)} on Venmo</a>` : "";
+    let acts;
+    if (S.settling === r.key) acts = r.current > 0 ? settlePanel(r) : requestPanel(r);
+    else {
+      const waitingOnMe = r.pendingReq && r.pendingReq.creditor_uid === S.me;
+      const btn = r.current > 0 && !waitingOnMe ? `<button class="btn primary" data-act="settle" data-k="${esc(r.key)}">Settle up</button>`
+        : r.current < 0 && r.uid && !r.pendingReq ? `<button class="btn primary" data-act="settle" data-k="${esc(r.key)}">I settled up</button>` : "";
+      acts = `${settleState(r)}${btn || pay ? `<div class="acts">${pay}${btn}</div>` : ""}`;
+    }
+    return `<article class="card qrow"><div class="qtop"><h3 style="margin:0">${esc(r.name)}${r.uid ? "" : ` <span class="sub">not on Handshake</span>`}</h3><span class="qamt ${tone(r.current)}">${signed(r.current)}</span></div>
+      <span class="sub">${rivalSentence(r)}</span>${acts}</article>`;
+  }).join("");
+  return `<div style="display:flex;flex-direction:column;gap:14px">${venmoAskBox()}${head}<div class="cards">${rows}</div>
+    <span class="sub">Includes predictions, Pick 'em All! and Contests, after past settle-ups. Golf matches settle on their own scorecards.</span></div>`;
+}
 function renderBoard() {
   const MINE = mineList(), cbox = myContestsBox();
   if (!MINE.length) {
@@ -808,14 +833,42 @@ function rivalSentence(r) {
   if (r.current < 0) return `You owe ${nm} ${pts(-r.current)}.`;
   return r.lastSettled ? `All square with ${nm}.` : `Dead even with ${nm} on points.`;
 }
+/* ---------- Venmo on settle-ups ---------- */
+function venmoField() {
+  return `<div class="vmfield"><label for="vmHandle"><b>Add your Venmo handle to the notification?</b> <span class="sub">Optional. Leave it blank to skip.</span></label>
+    <input id="vmHandle" maxlength="60" placeholder="@your-venmo" value="${esc(S.myVenmo ? "@" + S.myVenmo : "")}" autocomplete="off" autocapitalize="none"></div>`;
+}
+const venmoClean = (x) => String(x || "").trim().replace(/^(https?:\/\/)?(www\.)?(account\.)?venmo\.com\/(u\/)?/i, "").replace(/^@/, "");
+async function loadVenmo() {
+  const [mine, theirs] = await Promise.all([sb.from("venmo_handles").select("handle").maybeSingle(), sb.rpc("rival_venmos")]);
+  S.myVenmo = mine.error ? "" : mine.data?.handle || "";
+  S.rivalVenmo = new Map((theirs.error ? [] : theirs.data || []).map((x) => [x.uid, x.handle]));
+  S.venmoOn = !mine.error;
+}
+// After a settle-up: attach the handle, then ask once whether to remember it.
+async function venmoAfterSettle(handle, ids) {
+  const h = venmoClean(handle);
+  if (!h || !S.venmoOn) return false;
+  const { error } = await sb.rpc("attach_settle_venmo", { p_settlement: ids.settlement || null, p_request: ids.request || null, p_handle: h });
+  if (error) { toast(friendly(error)); return false; }
+  if (h !== S.myVenmo && store.get("hs-venmo-no") !== h) S.venmoAsk = h;
+  return true;
+}
+function venmoAskBox() {
+  if (!S.venmoAsk) return "";
+  return `<div class="vmask"><div><b>Want me to remember your Venmo handle?</b> I'll fill in @${esc(S.venmoAsk)} next time, and people who owe you will see it on Quanto.</div>
+    <div class="acts"><button class="btn primary" data-act="venmoYes">Yes, remember it</button><button class="btn ghost" data-act="venmoNo">No thanks</button></div></div>`;
+}
 function settlePanel(r) {
   return `<div class="cpanel"><span class="lab">Settle up with ${esc(r.name)}</span>
     <span class="sub">Clears the ${pts(r.current)} ${esc(r.name)} owes you, so your current balance goes back to zero. Your all-time points and record stay.</span>
+    ${venmoField()}
     <div class="acts"><button class="btn primary" data-act="confirmSettle" data-k="${esc(r.key)}">Settle ${pts(r.current)}</button><button class="btn ghost" data-act="unsettle">Cancel</button></div></div>`;
 }
 function requestPanel(r) {
   return `<div class="cpanel"><span class="lab">Tell ${esc(r.name)} you settled up</span>
     <span class="sub">${esc(r.name)} gets 24 hours to confirm or dispute that you've settled the ${pts(-r.current)} you owe. If ${esc(r.name)} doesn't answer, it counts and your balance goes back to zero. Your all-time points and record stay.</span>
+    ${venmoField()}
     <div class="acts"><button class="btn primary" data-act="sendSettleReq" data-k="${esc(r.key)}">I settled up</button><button class="btn ghost" data-act="unsettle">Cancel</button></div></div>`;
 }
 function settleState(r) {
@@ -842,6 +895,10 @@ function rivalActs(r) {
 }
 function renderRivals() {
   const table = standings(), rs = rivals();
+  if (S.venmoAsk && (table.length || rs.length)) return venmoAskBox() + renderRivalsInner(table, rs);
+  return renderRivalsInner(table, rs);
+}
+function renderRivalsInner(table, rs) {
   if (!table.length && !rs.length) return `<div class="empty"><h3>No scores yet</h3><p>Once a prediction is confirmed, the winner gains its points, the other side loses them, and the standings show up here.</p></div>`;
   const rows = table.map((r, i) => `<tr class="${r.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.score)}">${signed(r.score)}</td><td class="num">${r.w}–${r.l}${r.t ? "–" + r.t : ""}</td></tr>`).join("");
   const cards = rs.map((r) => {
@@ -1950,10 +2007,11 @@ async function ctAct(fn, args, note, notify) {
 
 function render() {
   renderLedger(); renderBell();
-  for (const t of ["board", "feed", "rivals", "vegas", "golf", "rsvp", "contest"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
+  for (const t of ["board", "feed", "rivals", "vegas", "golf", "rsvp", "contest", "quanto"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
+  try { const net = rivals().reduce((t, r) => t + (r.current || 0), 0), q = $("#quantoSub"); if (q) q.textContent = net ? (net > 0 ? "you're owed " + pts(net) : "you owe " + pts(-net)) + " net" : "all square"; } catch (e) {}
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
+  v.innerHTML = S.tab === "quanto" ? renderQuanto() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -1997,7 +2055,7 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { if (el.dataset.v === "board") loadContests().then(render).catch(() => {}); if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  tab: (el) => { if (el.dataset.v === "board") loadContests().then(render).catch(() => {}); if (el.dataset.v === "quanto" || el.dataset.v === "rivals") loadVenmo().then(render).catch(() => {}); if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
   vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
   pkGo: () => { S.tab = "feed"; S.pkView = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
   pkName: () => { S.pkNaming = true; render(); setTimeout(() => $("#pkName")?.focus(), 30); },
@@ -2179,22 +2237,30 @@ const ACT = {
   saveExtend: (el) => saveExtend(byId(el.dataset.id)),
   shakeIn: (el) => { $("#fShakeBy").value = localInput(Date.now() + Number(el.dataset.h) * 3600e3); },
   settle: (el) => { S.settling = el.dataset.k; render(); },
+  venmoYes: async () => { const h = S.venmoAsk; S.venmoAsk = null; const { data, error } = await sb.rpc("set_my_venmo", { p_handle: h }); if (error) return toast(friendly(error)); S.myVenmo = data || h; render(); toast("Got it. I'll remember @" + S.myVenmo + "."); },
+  venmoNo: () => { store.set("hs-venmo-no", S.venmoAsk); S.venmoAsk = null; render(); },
   unsettle: () => { S.settling = null; render(); },
   confirmSettle: async (el) => {
     const r = rivals().find((x) => x.key === el.dataset.k); if (!r) return;
+    const handle = $("#vmHandle")?.value || "";
     const { data, error } = await sb.rpc("settle_up", { p_other: r.uid, p_other_name: r.name });
     if (error) { toast(friendly(error)); return; }
-    S.settling = null; await loadSettlements(); render();
-    toast(`Settled. ${pts(data)} cleared with ${r.name}. Your all-time record stays.`);
-    const mine = S.settlements.find((x) => x.user_uid === S.me && (r.uid ? x.other_uid === r.uid : false));
-    if (mine) notifyQuiet({ settlement_id: mine.id });
+    S.settling = null; await loadSettlements();
+    const mine = S.settlements.filter((x) => x.user_uid === S.me && (r.uid ? x.other_uid === r.uid : x.other_name === r.name)).sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
+    const sentVenmo = mine && r.uid ? await venmoAfterSettle(handle, { settlement: mine.id }) : false;
+    render();
+    toast(`Settled. ${pts(data)} cleared with ${r.name}.${sentVenmo ? " Your Venmo went with the notification." : ""} Your all-time record stays.`);
+    if (mine && r.uid) notifyQuiet({ settlement_id: mine.id });
   },
   sendSettleReq: async (el) => {
     const r = rivals().find((x) => x.key === el.dataset.k); if (!r || !r.uid) return;
+    const handle = $("#vmHandle")?.value || "";
     const { data, error } = await sb.rpc("request_settlement", { p_creditor: r.uid });
     if (error) { toast(friendly(error)); return; }
-    S.settling = null; await loadSettlements(); render();
-    toast(`Sent. ${r.name} has 24 hours to confirm or dispute it.`);
+    S.settling = null; await loadSettlements();
+    const sentVenmo = await venmoAfterSettle(handle, { request: data });
+    render();
+    toast(`Sent${sentVenmo ? " with your Venmo" : ""}. ${r.name} has 24 hours to confirm or dispute it.`);
     notifyQuiet({ settlement_request_id: data });
   },
   answerSettle: async (el) => {
@@ -2848,7 +2914,7 @@ async function enterOnce() {
   if (!prof?.name) { $("#gName").value = ""; return showGate("name"); }
   S.myName = prof.name; $("#whoName").textContent = "Signed in as " + prof.name;
   showGate(null); render();
-  try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {}), loadContests().catch(() => {})]); render(); }
+  try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {}), loadContests().catch(() => {}), loadVenmo().catch(() => {})]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }
   if (!started) { started = true; liveUpdates(); setupAppPush(); }
   clearBadge();
