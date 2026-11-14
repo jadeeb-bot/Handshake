@@ -191,7 +191,7 @@ function renderLedger() {
   $("#recordSub").textContent = dec ? Math.round((t.w / dec) * 100) + "% right" + (t.t ? ", " + t.t + (t.t === 1 ? " tie" : " ties") : "") : "No decided calls yet";
   $("#inPlay").textContent = t.live;
   $("#inPlaySub").textContent = t.live ? pts(t.atStake) + " riding on them" : "Nothing open right now";
-  const need = S.bets.filter((b) => needsMe(b) || canSign(b)).length;
+  const need = S.bets.filter((b) => needsMe(b) || canSign(b)).length + myContests().filter((x) => x.need).length;
   const nc = $("#needCount"); nc.hidden = !need; nc.textContent = need;
   const cc = S.bets.filter(crashable).length;
   const ce = $("#crashCount"); ce.hidden = !cc; ce.textContent = cc;
@@ -717,16 +717,43 @@ function sorted(list) {
   }[S.sort] || (() => 0);
   return list.slice().sort(by);
 }
+// Active contests I'm part of, with what (if anything) they need from me.
+function myContests() {
+  if (!S.ct || S.ct.off) return [];
+  const live = ["open", "recorded", "proving", "proof", "refereeing"];
+  return S.ct.list.filter((c) => live.includes(c.stage)).map((c) => {
+    const entries = S.ct.entries.filter((x) => x.contest_id === c.id), mine = entries.filter((x) => x.uid === S.me);
+    const invited = S.ct.invitees.some((x) => x.contest_id === c.id && x.uid === S.me);
+    const sponsor = c.sponsor === S.me, open = c.stage === "open" && Date.now() < Date.parse(c.deadline);
+    if (!sponsor && !mine.length && !invited && c.referee !== S.me) return null;
+    let need = "";
+    if (c.stage === "open" && !open && sponsor) need = "Record the result";
+    else if (open && invited && !mine.length) need = "You haven't entered yet";
+    else if (c.stage === "recorded" && mine.length && !sponsor) need = "Result's in: 24 hours to say Prove it!";
+    else if (c.stage === "proving" && sponsor) need = "Post proof";
+    else if (c.stage === "proof" && c.objector === S.me) need = "Check the proof";
+    else if (c.stage === "refereeing" && c.referee === S.me) need = "You're the referee";
+    return { c, n: entries.length, mine: mine.length, need };
+  }).filter(Boolean).sort((a, b) => (!!b.need - !!a.need) || Date.parse(a.c.deadline) - Date.parse(b.c.deadline));
+}
+function myContestsBox() {
+  const rows = myContests();
+  if (!rows.length) return "";
+  return `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Your contests</h2><span class="sub">${rows.length} active</span></div>
+    <div class="cards">${rows.map(({ c, n, mine, need }) => `<article class="card wfround" data-act="ctFromMine" data-id="${c.id}">
+      <div class="slip-top"><span class="cat">Contest</span><span class="sub">${c.sponsor === S.me ? "You're sponsoring" : "From " + esc(personName(c.sponsor) || "a friend")} · ${mine ? `you have ${mine} entr${mine === 1 ? "y" : "ies"}` : "no entries from you"} · pot ${n * c.points}</span></div>
+      <h3>${esc(c.title)}</h3>${need ? `<span class="ctneed">${esc(need)}</span>` : ""}<span class="sub">${ctStageLine(c)}</span></article>`).join("")}</div></div>`;
+}
 function renderBoard() {
-  const MINE = mineList();
+  const MINE = mineList(), cbox = myContestsBox();
   if (!MINE.length) {
-    return `<div class="empty"><h3>No predictions yet</h3><p>Make the first call, or crash someone else's from the Everyone tab. Your predictions show here once they're made, ready for both sides to shake on.</p><button class="btn primary" data-act="new">Make a prediction</button></div>`;
+    return `<div style="display:flex;flex-direction:column;gap:22px">${cbox}<div class="empty"><h3>No predictions yet</h3><p>Make the first call, or crash someone else's from the Everyone tab. Your predictions show here once they're made, ready for both sides to shake on.</p><button class="btn primary" data-act="new">Make a prediction</button></div></div>`;
   }
   const list = sorted(MINE.filter((b) => inFilter(b, S.filter)));
   const chips = FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.filter === k}" data-act="filter" data-v="${k}">${l} <span class="mono">${MINE.filter((b) => inFilter(b, k)).length}</span></button>`).join("");
   const sel = `<select id="sortSel" aria-label="Sort predictions">${[["needs", "Needs you first"], ["newest", "Newest first"], ["due", "Due soonest"], ["stake", "Most points"]].map(([k, l]) => `<option value="${k}" ${S.sort === k ? "selected" : ""}>${l}</option>`).join("")}</select>`;
-  return `<div style="display:flex;flex-direction:column;gap:14px">${groupInviteBox()}<div class="filters">${chips}${sel}</div>
-    <div class="list">${list.length ? list.map(slip).join("") : `<div class="empty"><p>Nothing here right now.</p></div>`}</div></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:22px">${cbox}<div style="display:flex;flex-direction:column;gap:14px">${groupInviteBox()}<div class="filters">${chips}${sel}</div>
+    <div class="list">${list.length ? list.map(slip).join("") : `<div class="empty"><p>Nothing here right now.</p></div>`}</div></div></div>`;
 }
 function feedCard(b) {
   const p = stakeOf(b);
@@ -1951,7 +1978,7 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  tab: (el) => { if (el.dataset.v === "board") loadContests().then(render).catch(() => {}); if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
   vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
   pkGo: () => { S.tab = "feed"; S.pkView = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
   pkName: () => { S.pkNaming = true; render(); setTimeout(() => $("#pkName")?.focus(), 30); },
@@ -1993,6 +2020,7 @@ const ACT = {
   ctCancelForm: () => { S.ct.form = null; render(); },
   ctCreate: () => ctCreate(),
   ctOpen: (el) => ctOpen(el.dataset.id),
+  ctFromMine: (el) => { liveUnsub("rsvp"); wfUnsub(); S.tab = "contest"; ctOpen(el.dataset.id); window.scrollTo({ top: $("#view").offsetTop - 10, behavior: "smooth" }); },
   ctBack: () => { liveUnsub("contest"); S.ct.view = null; loadContests().then(render); render(); },
   ctEnter: (el) => ctAct("contest_enter", { p_contest: S.ct.view.id, p_choice: el.dataset.v }, "You're in."),
   ctWriteIn: () => { const v = $("#ctWriteIn").value.trim(); if (!v) return toast("Type your pick first."); ctAct("contest_enter", { p_contest: S.ct.view.id, p_choice: v }, "You're in."); },
@@ -2469,7 +2497,7 @@ function liveUpdates() {
     .on("postgres_changes", { event: "*", schema: "public", table: "settlements" }, () => { loadSettlements().then(render).catch(() => {}); })
     .on("postgres_changes", { event: "*", schema: "public", table: "settlement_requests" }, () => { loadSettlements().then(render).catch(() => {}); })
     .subscribe();
-  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); await loadSettlements(); await loadPickem().catch(() => {}); if (S.pkView) loadPkWeek(); if (S.wolf?.view) loadWolfRound(); render(); } catch (e) {} } });
+  document.addEventListener("visibilitychange", async () => { if (!document.hidden) { try { await loadBets(); await loadPeople(); await loadSettlements(); await loadPickem().catch(() => {}); await loadContests().catch(() => {}); if (S.pkView) loadPkWeek(); if (S.wolf?.view) loadWolfRound(); render(); } catch (e) {} } });
 }
 
 /* ---------- what's new: activity since your last look ---------- */
@@ -2801,7 +2829,7 @@ async function enterOnce() {
   if (!prof?.name) { $("#gName").value = ""; return showGate("name"); }
   S.myName = prof.name; $("#whoName").textContent = "Signed in as " + prof.name;
   showGate(null); render();
-  try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {})]); render(); }
+  try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {}), loadContests().catch(() => {})]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }
   if (!started) { started = true; liveUpdates(); setupAppPush(); }
   clearBadge();
