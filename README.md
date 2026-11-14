@@ -107,7 +107,7 @@ Run `update-wolf.sql` through `update-wolf-6.sql` in order, and redeploy `notify
 
 ## RSVP
 
-The **RSVP** tab plans anything (dinner, a trip). The organizer names it, sets a place or asks for ideas, proposes dates (day, optional time, optional end day) and invites people. Everyone marks Go / No-go on each date, can suggest more dates and places, and votes for places. A date "still works" until someone says No-go; what still works is ranked by Go votes, places by votes. Everyone is notified when the list of workable dates shrinks. **Lock it down** (organizer) picks the date and place and sends a **last call** to a list the organizer reviews (default: everyone who said Go to that date or hasn't answered it). Run `update-rsvp.sql`.
+The **RSVP** tab plans anything (dinner, a trip). The organizer names it, sets a place or asks for ideas, proposes dates (day, optional time, optional end day) and invites people. Everyone marks Go / No-go on each date, can suggest more dates and places, and votes for places. A date "still works" until someone says No-go; what still works is ranked by Go votes, places by votes. Everyone is notified when the list of workable dates shrinks. **Lock it down** (organizer) picks the date and place and sends a **last call** to a list the organizer reviews (default: everyone who said Go to that date or hasn't answered it). Invitees can be Handshake people or anyone by name and mobile number: a number already on Handshake becomes a normal invite; otherwise the organizer texts it with Open Messages and it's claimed (`claim_rsvp_invites()`, on sign-in) by whoever signs up with that exact number. Only the organizer sees the numbers. Run `update-rsvp.sql`, then `update-rsvp-2.sql`.
 
 ## Contests
 

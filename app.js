@@ -1544,7 +1544,7 @@ async function loadRsvp() {
 async function loadRsvpEvent() {
   const v = S.rsvp?.view; if (!v) return;
   const id = v.id;
-  const [e, inv, o, a, vn, vv, lc] = await Promise.all([
+  const [e, inv, o, a, vn, vv, lc, pi, lp, nums] = await Promise.all([
     sb.from("rsvp_events").select("*").eq("id", id).maybeSingle(),
     sb.from("rsvp_invitees").select("*").eq("event_id", id),
     sb.from("rsvp_options").select("*").eq("event_id", id),
@@ -1552,9 +1552,13 @@ async function loadRsvpEvent() {
     sb.from("rsvp_venues").select("*").eq("event_id", id),
     sb.from("rsvp_venue_votes").select("*").eq("event_id", id),
     sb.from("rsvp_lastcall").select("*").eq("event_id", id),
+    sb.from("rsvp_phone_invites").select("event_id,name,claimed_uid,created_at").eq("event_id", id),
+    sb.from("rsvp_lastcall_phones").select("event_id,name,claimed_uid").eq("event_id", id),
+    sb.rpc("rsvp_phone_numbers", { p_event: id }),
   ]);
   if (e.error || !e.data) { v.err = e.error ? friendly(e.error) : "That event is gone."; render(); return; }
-  Object.assign(v, { e: e.data, inv: (inv.data || []).map((x) => x.uid), opts: o.data || [], ans: a.data || [], venues: vn.data || [], votes: vv.data || [], lc: lc.data || [], err: "" });
+  Object.assign(v, { e: e.data, inv: (inv.data || []).map((x) => x.uid), opts: o.data || [], ans: a.data || [], venues: vn.data || [], votes: vv.data || [], lc: lc.data || [],
+    phoneInv: pi.error ? [] : pi.data || [], lcPhones: lp.error ? [] : lp.data || [], numbers: nums.error ? [] : nums.data || [], err: "" });
   render();
 }
 function rsvpTally(v) {
@@ -1586,6 +1590,7 @@ function renderRsvp() {
       <button class="btn ghost" data-act="rvAddOpt">+ Another date</button>
       <span class="lab">Invite</span>
       <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="rvInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>
+      ${rvPhoneRows(f.phones)}
       <div class="field"><label for="rvNotes">Notes (optional)</label><input id="rvNotes" maxlength="240" value="${esc(f.notes)}" autocomplete="off"></div>
       <p class="err" id="rvErr" hidden></p>
       <div class="acts"><button class="btn primary" data-act="rvCreate">Send invites</button><button class="btn ghost" data-act="rvCancelForm">Cancel</button></div></div>`;
@@ -1607,8 +1612,9 @@ function renderRsvpEvent() {
   const v = S.rsvp.view, head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="rvBack">‹ All plans</button></div>`;
   if (!v.e) return `<div style="display:flex;flex-direction:column;gap:14px">${head("RSVP")}<div class="empty"><p>${esc(v.err || "Loading…")}</p></div></div>`;
   const e = v.e, org = e.organizer === S.me, open = e.status === "open", members = [e.organizer, ...v.inv];
-  const nm = (u) => (u === S.me ? "You" : personName(u) || "Someone");
+  const nm = (u) => { if (String(u).startsWith("p:")) { const x = (v.numbers || []).find((y) => y.phone_digits === u.slice(2)); return x ? x.name + " (by text)" : "Texted guest"; } return u === S.me ? "You" : personName(u) || "Someone"; };
   const tally = rsvpTally(v), venues = rsvpVenues(v), works = tally.filter((t) => t.works);
+  const texted = v.phoneInv.filter((x) => !x.claimed_uid);
   const replied = members.filter((u) => v.ans.some((a) => a.uid === u));
   let out = `<div class="sub">${org ? "You're organizing" : "Organized by " + esc(nm(e.organizer))} · ${e.venue ? "Place: <b>" + esc(e.venue) + "</b>" : "Place: open to ideas"}${e.notes ? "<br>" + esc(e.notes) : ""}</div>`;
   if (e.status === "canceled") out += `<div class="wfdelete"><b>Canceled by the organizer.</b></div>`;
@@ -1618,7 +1624,9 @@ function renderRsvpEvent() {
     if (my) out += `<div class="acts"><button class="btn ${my.status === "in" ? "primary" : "ghost"}" data-act="rvLc" data-v="1">I'm in</button><button class="btn ${my.status === "out" ? "primary" : "ghost"}" data-act="rvLc" data-v="0">Can't make it</button></div>`;
     out += `<div class="table"><table><thead><tr><th>Last call</th><th class="num">Answer</th></tr></thead><tbody>
       <tr><td>${esc(nm(e.organizer))} <span class="sub">organizer</span></td><td class="num pos">In</td></tr>
-      ${v.lc.map((x) => `<tr class="${x.uid === S.me ? "me" : ""}"><td>${esc(nm(x.uid))}</td><td class="num ${x.status === "in" ? "pos" : x.status === "out" ? "neg" : ""}">${x.status === "in" ? "In" : x.status === "out" ? "Out" : "Waiting"}</td></tr>`).join("")}</tbody></table></div>`;
+      ${v.lc.map((x) => `<tr class="${x.uid === S.me ? "me" : ""}"><td>${esc(nm(x.uid))}</td><td class="num ${x.status === "in" ? "pos" : x.status === "out" ? "neg" : ""}">${x.status === "in" ? "In" : x.status === "out" ? "Out" : "Waiting"}</td></tr>`).join("")}
+      ${v.lcPhones.filter((x) => !x.claimed_uid).map((x) => `<tr><td>${esc(x.name)} <span class="sub">by text</span></td><td class="num">Texted</td></tr>`).join("")}</tbody></table></div>`;
+    if (org) out += rvTextList((v.numbers || []).filter((x) => x.on_last_call && !x.claimed), rvLastCallText(e, lo), "Text the last call");
     return `<div style="display:flex;flex-direction:column;gap:14px">${head(e.title)}${out}</div>`;
   }
   // when
@@ -1634,7 +1642,19 @@ function renderRsvpEvent() {
       ${open ? `<button class="chipbtn" aria-pressed="${x.voters.includes(S.me)}" data-act="rvVote" data-id="${x.id}">👍 ${x.voters.length}</button>` : `<span class="sub">👍 ${x.voters.length}</span>`}</div>`).join("") : `<span class="sub">${e.venue ? "Nobody's suggested anywhere else." : "No ideas yet."}</span>`;
   if (open) out += `<div class="pkjoin"><input id="rvNewVenue" maxlength="60" placeholder="${e.venue ? "Suggest a different place" : "Suggest a place"}" autocomplete="off"><button class="btn" data-act="rvSuggestVenue">Suggest</button></div>`;
   // who
-  out += `<span class="lab">Who</span><div class="sub">${members.map((u) => esc(nm(u)) + (replied.includes(u) ? " ✓" : " (no reply yet)")).join(" · ")}</div>`;
+  out += `<span class="lab">Who</span><div class="sub">${[...members.map((u) => esc(nm(u)) + (replied.includes(u) ? " ✓" : " (no reply yet)")), ...texted.map((x) => esc(x.name) + " (invited by text, not on Handshake yet)")].join(" · ")}</div>`;
+  if (org && open) {
+    out += rvTextList((v.numbers || []).filter((x) => !x.claimed), rvInviteText(e), "Text your invites");
+    const M = S.rsvp.more;
+    if (!M) out += `<div class="acts"><button class="btn ghost" data-act="rvMore">Invite more people</button></div>`;
+    else {
+      const cand = S.people.filter((p) => p.id !== S.me && !members.includes(p.id));
+      out += `<div class="card wfstart"><span class="lab">Invite more people</span>
+        ${cand.length ? `<div class="rvpeople">${cand.map((p) => `<label><input type="checkbox" class="rvMoreInv" value="${p.id}" ${M.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>` : ""}
+        ${rvPhoneRows(M.phones)}
+        <div class="acts"><button class="btn primary" data-act="rvMoreSend">Invite</button><button class="btn ghost" data-act="rvMoreNo">Cancel</button></div></div>`;
+    }
+  }
   // lock it down
   if (org && open) {
     const L = S.rsvp.lock;
@@ -1647,12 +1667,30 @@ function renderRsvpEvent() {
         <span class="sub">Pick the place</span>${venueChoices.map((n) => `<label class="rvpick"><input type="radio" name="rvLockVenue" value="${esc(n)}" ${L.venue === n ? "checked" : ""}> ${esc(n)}</label>`).join("")}
         <label class="rvpick"><input type="radio" name="rvLockVenue" value="__other" ${L.venue === "__other" ? "checked" : ""}> Somewhere else: <input id="rvLockOther" maxlength="60" value="${esc(L.other || "")}" autocomplete="off"></label>
         <span class="sub">Last call goes to (people who said Go to that date or haven't answered it; change it however you like)</span>
-        <div class="rvpeople">${L.people.map((u) => `<label><input type="checkbox" class="rvLc" value="${u}" ${L.on.includes(u) ? "checked" : ""}> ${esc(nm(u))}${members.includes(u) ? "" : " (added)"}</label>`).join("") || `<span class="sub">Nobody yet.</span>`}</div>
+        <div class="rvpeople">${L.people.map((u) => `<label><input type="checkbox" class="rvLc" value="${u}" ${L.on.includes(u) ? "checked" : ""}> ${esc(nm(u))}${members.includes(u) || String(u).startsWith("p:") ? "" : " (added)"}</label>`).join("") || `<span class="sub">Nobody yet.</span>`}</div>
         ${extra.length ? `<div class="pkjoin"><select id="rvAddPerson"><option value="">Add someone…</option>${extra.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select><button class="btn" data-act="rvAddPerson">Add</button></div>` : ""}
         <div class="acts"><button class="btn primary" data-act="rvLock">Send last call</button><button class="btn ghost" data-act="rvLockNo">Not yet</button></div></div>`;
     }
   }
   return `<div style="display:flex;flex-direction:column;gap:14px">${head(e.title)}${out}</div>`;
+}
+// "Invite by phone" rows (name + mobile number), shared by the plan form and Invite more
+function rvPhoneRows(list) {
+  return `<span class="sub">Not on Handshake? Invite them by name and mobile number. You'll text them the invite; it's waiting for them when they sign up with that number.</span>
+    ${list.map((x, i) => `<div class="rvphone"><input id="rvPN${i}" maxlength="30" placeholder="Name" value="${esc(x.name)}" autocomplete="off"><input id="rvPP${i}" type="tel" inputmode="tel" placeholder="Mobile number" value="${esc(x.phone)}" autocomplete="off"><button class="btn quiet" data-act="rvDelPhone" data-v="${i}" aria-label="Remove">✕</button></div>`).join("")}
+    <button class="btn ghost" data-act="rvAddPhone">+ Invite by phone</button>`;
+}
+function rvPhoneCapture(list) { return list.map((x, i) => ({ name: $("#rvPN" + i)?.value ?? x.name, phone: $("#rvPP" + i)?.value ?? x.phone })); }
+function rvPhonesClean(list) {
+  const out = [];
+  for (const x of list) {
+    if (!x.name.trim() && !x.phone.trim()) continue;
+    const ph = normPhone(x.phone || "");
+    if (!ph) return { err: `Check the number for ${x.name.trim() || "the person you're texting"}.` };
+    if (!x.name.trim()) return { err: "Give each person you text a name." };
+    out.push({ name: x.name.trim(), phone: ph });
+  }
+  return { list: out };
 }
 function rvFormCapture() {
   const f = S.rsvp?.form; if (!f || !$("#rvTitle")) return;
@@ -1660,11 +1698,38 @@ function rvFormCapture() {
   f.where = document.querySelector('input[name="rvWhere"]:checked')?.value || "set";
   f.opts = f.opts.map((o, i) => ({ day: $("#rvD" + i)?.value || "", time: $("#rvT" + i)?.value || "", end: $("#rvE" + i)?.value || "" }));
   f.inv = checked(".rvInv");
+  f.phones = rvPhoneCapture(f.phones);
+}
+function rvInviteText(e) {
+  return `${S.myName || "A friend"} invited you to "${e.title}" on Handshake. Pick the dates that work for you: sign up at ${PAGE_URL} with this phone number and it'll be waiting for you.`;
+}
+function rvLastCallText(e, lo) {
+  return `Last call: ${e.title}, ${lo ? optLabel(lo) : ""} at ${e.locked_venue}. Are you in? Sign up at ${PAGE_URL} with this phone number to confirm (or just text me back).`;
+}
+function rvTextList(rows, text, title) {
+  if (!rows.length) return "";
+  return `<div class="card wfstart"><span class="lab">${title}</span><span class="sub">Handshake can't send texts, so tap each one: Messages opens with the number and invite filled in.</span>
+    ${rows.map((x) => `<div class="rvvenue"><span><b>${esc(x.name)}</b> <span class="sub">${esc(prettyPhone("+" + x.phone_digits))}</span></span><a class="btn ghost" href="${esc(smsHref("+" + x.phone_digits, text))}">Open Messages</a></div>`).join("")}</div>`;
+}
+function rvMoreCapture() {
+  const m = S.rsvp?.more; if (!m) return;
+  m.inv = checked(".rvMoreInv"); m.phones = rvPhoneCapture(m.phones);
+}
+async function rvMoreSend() {
+  rvMoreCapture();
+  const m = S.rsvp.more, ph = rvPhonesClean(m.phones);
+  if (ph.err) return toast(ph.err);
+  if (!m.inv.length && !ph.list.length) return toast("Pick someone or add a phone number.");
+  const { error } = await sb.rpc("rsvp_invite", { p_event: S.rsvp.view.id, p_invitees: m.inv, p_phones: ph.list });
+  if (error) return toast(friendly(error));
+  S.rsvp.more = null; toast(ph.list.length ? "Invited. Text the new people below." : "Invited.");
+  await loadRsvpEvent();
 }
 function rvLockDefaults(optId) {
   const v = S.rsvp.view, members = [v.e.organizer, ...v.inv].filter((u) => u !== v.e.organizer);
   const on = members.filter((u) => { const a = v.ans.find((x) => x.option_id === optId && x.uid === u); return !a || a.answer === "go"; });
-  return { people: members, on };
+  const phones = (v.numbers || []).filter((x) => !x.claimed).map((x) => "p:" + x.phone_digits);
+  return { people: [...members, ...phones], on: [...on, ...phones] };
 }
 function rvLockCapture() {
   const L = S.rsvp?.lock; if (!L || !document.querySelector('input[name="rvLockOpt"]')) return;
@@ -1674,7 +1739,7 @@ function rvLockCapture() {
   L.on = checked(".rvLc");
 }
 function rvOpen(id) {
-  S.rsvp.view = { id }; S.rsvp.lock = null; render(); loadRsvpEvent();
+  S.rsvp.view = { id }; S.rsvp.lock = null; S.rsvp.more = null; render(); loadRsvpEvent();
   liveSub("rsvp", [["rsvp_answers", "event_id=eq." + id], ["rsvp_events", "id=eq." + id], ["rsvp_venue_votes", "event_id=eq." + id], ["rsvp_lastcall", "event_id=eq." + id]], () => { if (S.tab === "rsvp" && S.rsvp?.view?.id === id) loadRsvpEvent(); });
 }
 async function rvCreate() {
@@ -1683,8 +1748,10 @@ async function rvCreate() {
   if (!f.title.trim()) return err("Say what the plan is.");
   const opts = f.opts.filter((o) => o.day).map((o) => ({ day: o.day, at_time: o.time || null, end_day: o.end || null }));
   if (!opts.length) return err("Add at least one date.");
-  if (!f.inv.length) return err("Invite at least one person.");
-  const { data, error } = await sb.rpc("create_rsvp", { p_title: f.title.trim(), p_venue: f.where === "set" ? f.venue.trim() : null, p_notes: f.notes.trim(), p_options: opts, p_invitees: f.inv });
+  const ph = rvPhonesClean(f.phones);
+  if (ph.err) return err(ph.err);
+  if (!f.inv.length && !ph.list.length) return err("Invite at least one person.");
+  const { data, error } = await sb.rpc("create_rsvp", { p_title: f.title.trim(), p_venue: f.where === "set" ? f.venue.trim() : null, p_notes: f.notes.trim(), p_options: opts, p_invitees: f.inv, p_phones: ph.list });
   if (error) return err(friendly(error));
   notifyQuiet({ rsvp_event: data, kind: "invite" });
   S.rsvp.form = null; await loadRsvp(); rvOpen(data); toast("Invites sent.");
@@ -1699,9 +1766,10 @@ async function rvAct(fn, args, note, kind) {
 async function rvLock() {
   rvLockCapture();
   const L = S.rsvp.lock, venue = L.venue === "__other" ? (L.other || "").trim() : L.venue;
+  const uids = L.on.filter((u) => !u.startsWith("p:")), phones = L.on.filter((u) => u.startsWith("p:")).map((u) => u.slice(2));
   if (!L.opt) return toast("Pick the date.");
   if (!venue) return toast("Pick the place.");
-  const { data, error } = await sb.rpc("rsvp_lock", { p_event: S.rsvp.view.id, p_option: L.opt, p_venue: venue, p_people: L.on });
+  const { data, error } = await sb.rpc("rsvp_lock", { p_event: S.rsvp.view.id, p_option: L.opt, p_venue: venue, p_people: uids, p_phones: phones });
   if (error) return toast(friendly(error));
   notifyQuiet({ rsvp_event: S.rsvp.view.id, kind: "lock" });
   S.rsvp.lock = null; toast(`Locked down. Last call sent to ${data} ${data === 1 ? "person" : "people"}.`);
@@ -1898,7 +1966,12 @@ const ACT = {
   pkWeek: (el) => pkOpen(S.pkView.gid, weekShift(S.pkView.week, +el.dataset.v)),
   pkPick: (el) => pkPick(S.pkView.gid, el.dataset.id, el.dataset.v),
   pkTb: () => pkSaveTb(),
-  rvNew: () => { S.rsvp.form = { title: "", where: "set", venue: "", notes: "", opts: [{ day: "", time: "", end: "" }], inv: [] }; render(); },
+  rvNew: () => { S.rsvp.form = { title: "", where: "set", venue: "", notes: "", opts: [{ day: "", time: "", end: "" }], inv: [], phones: [] }; render(); },
+  rvAddPhone: () => { const tgt = S.rsvp.view ? S.rsvp.more : S.rsvp.form; if (S.rsvp.view) rvMoreCapture(); else rvFormCapture(); tgt.phones.push({ name: "", phone: "" }); render(); setTimeout(() => $("#rvPN" + (tgt.phones.length - 1))?.focus(), 30); },
+  rvDelPhone: (el) => { const tgt = S.rsvp.view ? S.rsvp.more : S.rsvp.form; if (S.rsvp.view) rvMoreCapture(); else rvFormCapture(); tgt.phones.splice(+el.dataset.v, 1); render(); },
+  rvMore: () => { S.rsvp.more = { inv: [], phones: [{ name: "", phone: "" }] }; render(); },
+  rvMoreNo: () => { S.rsvp.more = null; render(); },
+  rvMoreSend: () => rvMoreSend(),
   rvCancelForm: () => { S.rsvp.form = null; render(); },
   rvAddOpt: () => { rvFormCapture(); S.rsvp.form.opts.push({ day: "", time: "", end: "" }); render(); },
   rvDelOpt: (el) => { rvFormCapture(); S.rsvp.form.opts.splice(+el.dataset.v, 1); if (!S.rsvp.form.opts.length) S.rsvp.form.opts.push({ day: "", time: "", end: "" }); render(); },
@@ -2733,6 +2806,7 @@ async function enterOnce() {
   if (!started) { started = true; liveUpdates(); setupAppPush(); }
   clearBadge();
   pkJoinPending();
+  sb.rpc("claim_rsvp_invites").then(({ data }) => { if (data > 0) { toast(`You have ${data} RSVP invite${data === 1 ? "" : "s"} waiting on the RSVP tab.`); S.rsvp = null; if (S.tab === "rsvp") render(); } }).catch(() => {});
   if (S.pendingAppToken) saveAppToken(S.pendingAppToken);
 }
 
