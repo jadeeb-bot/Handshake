@@ -755,8 +755,8 @@ function renderQuanto() {
   const rows = rs.map((r) => {
     const h = r.uid && S.rivalVenmo?.get(r.uid);
     const note = "Handshake settle-up with " + (S.myName || "me");
-    const pay = r.current < 0 ? `<a class="btn ghost" href="${esc(venmoLink("pay", h, -r.current, note))}">Pay ${dollars(-r.current)}${h ? " to @" + esc(h) : ""} on Venmo</a>`
-      : r.current > 0 && r.uid ? `<a class="btn ghost" href="${esc(venmoLink("request", h, r.current, note))}">Request ${dollars(r.current)} on Venmo</a>` : "";
+    const pay = r.current < 0 ? `<a class="btn ghost" href="${esc(venmoLink("pay", h, note))}">Pay${h ? " @" + esc(h) : ""} on Venmo</a>`
+      : r.current > 0 && r.uid ? `<a class="btn ghost" href="${esc(venmoLink("request", h, note))}">Request${h ? " from @" + esc(h) : ""} on Venmo</a>` : "";
     let acts;
     if (S.settling === r.key) acts = r.current > 0 ? settlePanel(r) : requestPanel(r);
     else {
@@ -839,16 +839,15 @@ function rivalSentence(r) {
   return r.lastSettled ? `All square with ${nm}.` : `Dead even with ${nm} on points.`;
 }
 /* ---------- Venmo on settle-ups ---------- */
-const USD_PER_POINT = 1;   // decided Nov 14: 1 point = $1 for Venmo requests and payments
-// Opens Venmo with everything filled in; the person still taps Request / Pay.
-function venmoLink(kind, handle, points, note) {
-  const q = new URLSearchParams({ txn: kind === "request" ? "charge" : "pay", amount: String(points * USD_PER_POINT), note: note || "Handshake settle-up" });
+// Opens Venmo with the person (if their handle is saved) and a note filled in; the Shaker types
+// the amount and taps Request / Pay (decided Nov 14: no amount, no points-to-dollars).
+function venmoLink(kind, handle, note) {
+  const q = new URLSearchParams({ txn: kind === "request" ? "charge" : "pay", note: note || "Handshake settle-up" });
   if (handle) q.set("recipients", handle);
   const mobile = IN_APP || /iPhone|iPad|iPod|Android/.test(navigator.userAgent);
   if (!mobile) q.set("audience", "private");
   return (mobile ? "venmo://paycharge?" : "https://venmo.com/?") + q.toString();
 }
-const dollars = (p) => "$" + (p * USD_PER_POINT).toLocaleString("en-US");
 function phoneForUid(uid) {
   if (!uid) return "";
   for (const b of S.bets) if ((b.a?.uid === uid || b.b?.uid === uid) && S.phones?.get(b.id)) return S.phones.get(b.id);
@@ -859,16 +858,16 @@ function settleDoneBox() {
   const d = S.settleDone; if (!d) return "";
   const v = d.venmo ? ` Venmo: @${d.venmo} (venmo.com/u/${d.venmo}).` : "";
   const text = d.kind === "settled"
-    ? `Settled up on Handshake: the ${pts(d.points)} you owed me are cleared.${d.venmo ? ` Send me ${dollars(d.points)} on Venmo: @${d.venmo} (venmo.com/u/${d.venmo}).` : ""}`
+    ? `Settled up on Handshake: the ${pts(d.points)} you owed me are cleared.${v}`
     : `I just settled up the ${pts(d.points)} I owed you on Handshake. Confirm it in the app within 24 hours.${v}`;
   const num = phoneForUid(d.uid) || store.get(phoneKey(d.name)) || "";
   const theirs = d.uid && S.rivalVenmo?.get(d.uid);
   const venmoBtn = d.kind === "settled"
-    ? `<a class="btn" href="${esc(venmoLink("request", theirs, d.points, "Handshake settle-up with " + (S.myName || "me")))}">Request ${dollars(d.points)} on Venmo${theirs ? " from @" + esc(theirs) : ""}</a>`
-    : `<a class="btn" href="${esc(venmoLink("pay", theirs, d.points, "Handshake settle-up with " + (S.myName || "me")))}">Pay ${dollars(d.points)} on Venmo${theirs ? " to @" + esc(theirs) : ""}</a>`;
+    ? `<a class="btn" href="${esc(venmoLink("request", theirs, "Handshake settle-up with " + (S.myName || "me")))}">Request on Venmo${theirs ? " from @" + esc(theirs) : ""}</a>`
+    : `<a class="btn" href="${esc(venmoLink("pay", theirs, "Handshake settle-up with " + (S.myName || "me")))}">Pay on Venmo${theirs ? " to @" + esc(theirs) : ""}</a>`;
   return `<div class="cpanel settledone"><span class="lab">Let ${esc(d.name)} know</span><p class="msg">${esc(text)}</p>
     <div class="acts"><button class="btn primary" data-act="sdCopy">Copy</button><a class="btn" href="${esc(smsHref(num, text))}">Open Messages</a>${venmoBtn}<button class="btn ghost" data-act="sdClose">Done</button></div>
-    <span class="sub">${d.uid ? "They also got a Handshake notification. " : ""}Venmo opens with ${theirs ? "@" + esc(theirs) + ", " : ""}${dollars(d.points)} and a note filled in; you just tap ${d.kind === "settled" ? "Request" : "Pay"}.${theirs ? "" : " Pick the person in Venmo."}</span></div>`;
+    <span class="sub">${d.uid ? "They also got a Handshake notification. " : ""}Venmo opens with ${theirs ? "@" + esc(theirs) + " and " : ""}a note filled in; type the amount and tap ${d.kind === "settled" ? "Request" : "Pay"}.${theirs ? "" : " Pick the person in Venmo (they haven't saved a handle here)."}</span></div>`;
 }
 function venmoField() {
   return `<div class="vmfield"><label for="vmHandle"><b>Add your Venmo handle to the notification?</b> <span class="sub">Optional. Leave it blank to skip.</span></label>
