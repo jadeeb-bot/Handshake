@@ -1120,6 +1120,26 @@ function pkInviteText(g) {
   const code = S.pk.codes.get(g.id);
   return hs(`Join my Pick 'em All! group "${g.name}" on Handshake. Every week, pick every NFL game against the spread. The week's winner takes 5 pts from everyone else. Tap to join: ${PAGE_URL}?join=${code} (or enter code ${code} on the Everyone tab).`);
 }
+// One line per graded week: who won and how much, or that the pot rolled over.
+function pkWeekLine(g, w) {
+  const winners = S.pk.results.filter((r) => r.group_id === g.id && r.week === w.week && r.won && r.points > 0);
+  return winners.length ? `${esc(listNames(winners.map((r) => pkName(r.uid))))} won, ${signed(winners[0].points)} pts`
+    : w.rolled ? `nobody got half right (best was ${w.best} of ${w.games}); the pot rolled over`
+    : `no points moved (${w.entries} entr${w.entries === 1 ? "y" : "ies"})`;
+}
+function pkResults(g) {
+  const weeks = S.pk.weeks.filter((w) => w.group_id === g.id).sort((a, b) => (a.week < b.week ? 1 : -1));
+  if (!weeks.length) return `<span class="sub">No weeks scored yet. Results show here after Monday night each week.</span>`;
+  return `<div class="pkresults">${weeks.map((w) => `<button class="pkres" data-act="pkGoWeek" data-v="${esc(w.week)}"><b>${esc(weekLabel(w.week))}</b><span>${pkWeekLine(g, w)}</span></button>`).join("")}</div>`;
+}
+// The group's overall standings (pool points, weeks won, this week's picks in).
+function pkStandings(g, rows = pkTotals(g.id)) {
+  const subs = new Set(S.pk.subs.filter((x) => x.group_id === g.id).map((x) => x.uid));
+  const inCol = S.pk.v3;
+  return `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Wins</th>${inCol ? `<th class="num pkinh">Picks in</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
+    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.uid === S.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
+    + (inCol ? `<span class="sub">Picks in this week (${esc(weekLabel(nflWeek(Date.now())))}): ${rows.filter((r) => subs.has(r.uid)).length} of ${rows.length}</span>` : "");
+}
 function pkCard(g) {
   const mine = pkIsMember(g.id), rows = pkTotals(g.id);
   const last = S.pk.weeks.find((w) => w.group_id === g.id);
@@ -1132,11 +1152,7 @@ function pkCard(g) {
   const potLine = rolled ? `<div class="pkpot">💰 <b>${rolled * 5} pts rolled over</b> and waiting for this week's winner.</div>` : "";
   const reqs = g.created_by === S.me ? S.pk.requests.filter((q) => q.group_id === g.id && q.status === "pending") : [];
   const reqRows = reqs.map((q) => `<div class="pkreq"><span><b>${esc(pkName(q.uid))}</b> wants to crash.</span><span class="acts"><button class="btn primary" data-act="pkLetIn" data-id="${g.id}" data-v="${q.uid}">Let them in</button><button class="btn ghost" data-act="pkSayNo" data-id="${g.id}" data-v="${q.uid}">No thanks</button></span></div>`).join("");
-  const subs = new Set(S.pk.subs.filter((x) => x.group_id === g.id).map((x) => x.uid));
-  const inCol = S.pk.v3;
-  const table = `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Wins</th>${inCol ? `<th class="num pkinh">Picks in</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
-    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.uid === S.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
-    + (inCol ? `<span class="sub">Picks in this week (${esc(weekLabel(nflWeek(Date.now())))}): ${rows.filter((r) => subs.has(r.uid)).length} of ${rows.length}</span>` : "");
+  const table = pkStandings(g, rows);
   let acts;
   if (mine) acts = `<div class="acts"><button class="btn primary" data-act="pkOpen" data-id="${g.id}">Make your picks</button><button class="btn ghost" data-act="pkInvite" data-id="${g.id}">Invite friends</button></div>`;
   else if (pkMyInvite(g.id)) {
@@ -1256,7 +1272,11 @@ function renderPickem() {
   if (!g) { S.pkView = null; return renderFeed(); }
   const mine = pkIsMember(g.id), cur = nflWeek(Date.now());
   const nav = `<div class="filters"><button class="chipbtn" data-act="pkWeek" data-v="-1">‹ Earlier</button><span class="sub" style="font-weight:600">${esc(weekLabel(v.week))}${v.week === cur ? " (this week)" : ""}</span>${v.week < weekShift(cur, 1) ? `<button class="chipbtn" data-act="pkWeek" data-v="1">Later ›</button>` : ""}</div>`;
-  const head = `<div class="secthead"><h2>${esc(g.name)}</h2><button class="btn quiet" data-act="pkBack">‹ All groups</button></div>${nav}`;
+  const rolled = S.pk.carry.filter((c) => c.group_id === g.id).length;
+  const head = `<div class="secthead"><h2>${esc(g.name)}</h2><button class="btn quiet" data-act="pkBack">‹ All groups</button></div>
+    <span class="lab">Standings</span>${pkStandings(g)}${rolled ? `<div class="pkpot">💰 <b>${rolled * 5} pts rolled over</b> and waiting for this week's winner.</div>` : ""}
+    <span class="lab">Results</span>${pkResults(g)}
+    <span class="lab">Picks</span>${nav}`;
   if (v.games === null) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>Loading the week…</p></div></div>`;
   if (v.err) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>${esc(v.err)}</p></div></div>`;
   const pool = v.games.filter((x) => x.home_spread != null);
@@ -2623,6 +2643,7 @@ const ACT = {
     toast(el.dataset.v === "dismiss" ? "Dismissed." : el.dataset.v === "suspend" ? "Removed, and the poster is suspended." : "Removed.");
   },
   pkCrash: (el) => pkCrash(el.dataset.id),
+  pkGoWeek: (el) => pkOpen(S.pkView.gid, el.dataset.v),
   pkInvSend: (el) => pkInvSend(el.dataset.id),
   pkInvAnswer: (el) => pkInvAnswer(el.dataset.id, el.dataset.v === "1"),
   pkLetIn: (el) => pkAnswer(el.dataset.id, el.dataset.v, true),
