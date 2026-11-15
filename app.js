@@ -193,7 +193,7 @@ function renderLedger() {
   $("#inPlaySub").textContent = t.live ? pts(t.atStake) + " riding on them" : "Nothing open right now";
   const need = S.bets.filter((b) => needsMe(b) || canSign(b)).length + myContests().filter((x) => x.need).length;
   const nc = $("#needCount"); nc.hidden = !need; nc.textContent = need;
-  const cc = S.bets.filter(crashable).length;
+  const cc = S.bets.filter(crashable).length + (S.pk?.groups || []).filter((g) => pkMyInvite(g.id)).length;
   const ce = $("#crashCount"); ce.hidden = !cc; ce.textContent = cc;
 }
 
@@ -1034,7 +1034,7 @@ const pkIsMember = (id) => !!S.me && pkMembers(id).some((m) => m.uid === S.me);
 const pkName = (uid) => personName(uid) || "Someone";
 
 async function loadPickem() {
-  const [g, m, r, w, c, led, car, req, sub] = await Promise.all([
+  const [g, m, r, w, c, led, car, req, sub, inv] = await Promise.all([
     sb.from("pickem_groups").select("id,name,created_by,created_at").order("created_at"),
     sb.from("pickem_members").select("*"),
     sb.from("pickem_results").select("*"),
@@ -1044,6 +1044,7 @@ async function loadPickem() {
     sb.from("pickem_carry").select("*").is("paid_week", null),
     sb.from("pickem_crash_requests").select("*"),
     sb.from("pickem_submissions").select("*").eq("week", nflWeek(Date.now())),
+    sb.from("pickem_invites").select("*"),
   ]);
   if (g.error) { S.pk = { ...S.pk, off: true }; return; }
   // before update-pickem-2.sql runs, the ledger is missing: fall back to weekly results
@@ -1051,7 +1052,7 @@ async function loadPickem() {
   S.pk = { off: false, groups: g.data || [], members: m.data || [], results: r.data || [], weeks: w.data || [],
     codes: new Map((c.data || []).map((x) => [x.group_id, x.code])), ledger, carry: car.error ? [] : car.data || [],
     requests: req.error ? [] : req.data || [], v2: !led.error,
-    subs: sub.error ? [] : sub.data || [], v3: !sub.error };
+    subs: sub.error ? [] : sub.data || [], v3: !sub.error, invites: inv.error ? [] : inv.data || [], v4: !inv.error };
 }
 function pkTotals(gid) {
   const rows = new Map(pkMembers(gid).map((m) => [m.uid, { uid: m.uid, name: pkName(m.uid), points: 0, won: 0, weeks: 0 }]));
@@ -1083,7 +1084,11 @@ function pkCard(g) {
     + (inCol ? `<span class="sub">Picks in this week (${esc(weekLabel(nflWeek(Date.now())))}): ${rows.filter((r) => subs.has(r.uid)).length} of ${rows.length}</span>` : "");
   let acts;
   if (mine) acts = `<div class="acts"><button class="btn primary" data-act="pkOpen" data-id="${g.id}">Make your picks</button><button class="btn ghost" data-act="pkInvite" data-id="${g.id}">Invite friends</button></div>`;
-  else {
+  else if (pkMyInvite(g.id)) {
+    const iv = pkMyInvite(g.id);
+    acts = `<div class="pkinvited"><b>${esc(pkName(iv.invited_by))} invited you.</b> <span class="sub">No code needed.</span></div>
+      <div class="acts"><button class="btn primary" data-act="pkInvAnswer" data-id="${g.id}" data-v="1">Join</button><button class="btn ghost" data-act="pkInvAnswer" data-id="${g.id}" data-v="0">No thanks</button><button class="btn quiet" data-act="pkOpen" data-id="${g.id}">See picks</button></div>`;
+  } else {
     const mineReq = S.pk.requests.find((q) => q.group_id === g.id && q.uid === S.me);
     const ask = !S.pk.v2 ? `<span class="sub">Invite only. Ask ${esc(pkName(g.created_by))} for the link.</span>`
       : mineReq?.status === "pending" ? `<span class="sub">You asked to crash. Waiting on ${esc(pkName(g.created_by))}.</span>`
@@ -1093,7 +1098,12 @@ function pkCard(g) {
   let invite = "";
   if (S.pkInviting === g.id && S.pk.codes.get(g.id)) {
     const text = pkInviteText(g);
-    invite = `<div class="cpanel"><span class="lab">Invite code <b class="mono">${esc(S.pk.codes.get(g.id))}</b></span><p class="msg" id="pkInviteText">${esc(text)}</p>
+    const members = new Set(pkMembers(g.id).map((m) => m.uid)), pend = new Set((S.pk.invites || []).filter((x) => x.group_id === g.id && x.status === "pending").map((x) => x.uid));
+    const cands = S.people.filter((p) => p.id !== S.me && !members.has(p.id));
+    const pick = S.pk.v4 && cands.length ? `<span class="lab">Invite people on Handshake</span><span class="sub">They get a notification and a Join button. No code needed.</span>
+      <div class="rvpeople">${cands.map((p) => pend.has(p.id) ? `<label class="sub">${esc(p.name)} (invited)</label>` : `<label><input type="checkbox" class="pkInv" value="${p.id}"> ${esc(p.name)}</label>`).join("")}</div>
+      ${cands.some((p) => !pend.has(p.id)) ? `<div class="acts"><button class="btn primary" data-act="pkInvSend" data-id="${g.id}">Send invites</button></div>` : ""}<span class="lab">Or text the invite</span>` : "";
+    invite = `<div class="cpanel">${pick}<span class="lab">Invite code <b class="mono">${esc(S.pk.codes.get(g.id))}</b></span><p class="msg" id="pkInviteText">${esc(text)}</p>
       <div class="acts"><button class="btn primary" data-act="pkCopyInvite" data-id="${g.id}">Copy invite</button><a class="btn" href="${esc(smsHref("", text))}">Open Messages</a><button class="btn ghost" data-act="pkCloseInvite">Close</button></div></div>`;
   }
   return `<article class="card pkcard">
@@ -1102,7 +1112,7 @@ function pkCard(g) {
 }
 function pkSection() {
   if (!S.pk || S.pk.off) return "";
-  const groups = S.pk.groups.slice().sort((a, b) => pkIsMember(b.id) - pkIsMember(a.id) || Date.parse(b.created_at) - Date.parse(a.created_at));
+  const groups = S.pk.groups.slice().sort((a, b) => pkIsMember(b.id) - pkIsMember(a.id) || !!pkMyInvite(b.id) - !!pkMyInvite(a.id) || Date.parse(b.created_at) - Date.parse(a.created_at));
   const create = S.pkNaming
     ? `<div class="card"><div class="field"><label for="pkName">Name your group</label><input id="pkName" maxlength="30" placeholder="Sunday Degenerates" autocomplete="off"></div>
         <p class="err" id="pkErr" hidden></p><div class="acts"><button class="btn primary" data-act="pkCreate">Start the group</button><button class="btn ghost" data-act="pkUnname">Cancel</button></div></div>`
@@ -1279,6 +1289,24 @@ async function pkBonus(game) {
   render();
   const { error } = await sb.rpc("save_pickem_bonus", { p_group: v.gid, p_week: v.week, p_game: next });
   if (error) { toast(friendly(error)); loadPkWeek(); }
+}
+const pkMyInvite = (gid) => (S.pk?.invites || []).find((x) => x.group_id === gid && x.uid === S.me && x.status === "pending" && !pkIsMember(gid));
+async function pkInvSend(gid) {
+  const uids = checked(".pkInv");
+  if (!uids.length) return toast("Tick at least one person.");
+  const { data, error } = await sb.rpc("pickem_invite", { p_group: gid, p_uids: uids });
+  if (error) return toast(friendly(error));
+  if (data) notifyQuiet({ pickem_group: gid, kind: "invite" });
+  await loadPickem(); render();
+  toast(data ? `Invited ${data} ${data === 1 ? "person" : "people"}. They'll see a Join button.` : "They're already invited.");
+}
+async function pkInvAnswer(gid, yes) {
+  const { error } = await sb.rpc("pickem_answer_invite", { p_group: gid, p_join: yes });
+  if (error) { toast(friendly(error)); await loadPickem(); return render(); }
+  await loadPickem();
+  if (!yes) { render(); return toast("Got it. No thanks."); }
+  toast("You're in " + (pkGroup(gid)?.name || "the group") + ". Make your picks!");
+  pkOpen(gid);
 }
 async function pkCrash(gid) {
   const { error } = await sb.rpc("request_pickem_crash", { p_group: gid });
@@ -2401,6 +2429,8 @@ const ACT = {
   pkSubmit: () => pkSubmit(),
   pkBonus: (el) => pkBonus(el.dataset.id),
   pkCrash: (el) => pkCrash(el.dataset.id),
+  pkInvSend: (el) => pkInvSend(el.dataset.id),
+  pkInvAnswer: (el) => pkInvAnswer(el.dataset.id, el.dataset.v === "1"),
   pkLetIn: (el) => pkAnswer(el.dataset.id, el.dataset.v, true),
   pkSayNo: (el) => pkAnswer(el.dataset.id, el.dataset.v, false),
   filter: (el) => { S.filter = el.dataset.v; render(); },

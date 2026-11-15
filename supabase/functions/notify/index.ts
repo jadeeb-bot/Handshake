@@ -194,6 +194,22 @@ async function settleNote(admin: Admin, caller: string, body: { settlement_reque
 }
 
 /* ---------- Pick 'em All! crash requests ---------- */
+/* ---------- Pick 'em invites by account ---------- */
+async function pkInviteNote(admin: Admin, caller: string, body: { pickem_group?: string }) {
+  if (!isId(body.pickem_group)) return reply(400, { error: "pickem_group is wrong." });
+  const { data: g } = await admin.from("pickem_groups").select("name").eq("id", body.pickem_group).maybeSingle();
+  if (!g) return reply(404, { error: "That group is gone." });
+  const since = new Date(Date.now() - 5 * 60_000).toISOString();
+  const { data: inv } = await admin.from("pickem_invites").select("uid").eq("group_id", body.pickem_group)
+    .eq("invited_by", caller).eq("status", "pending").gte("created_at", since);
+  const to = (inv || []).map((x: { uid: string }) => x.uid);
+  if (!to.length) return reply(200, { sent: 0, reason: "nothing new" });
+  const who = ((await admin.from("profiles").select("name").eq("id", caller).maybeSingle()).data?.name as string) || "Someone";
+  const sent = await deliver(admin, to, { title: "Pick 'em All! invite",
+    body: `${who} invited you to the Pick 'em All! group ${g.name}. Open the Everyone tab and tap Join.`, tag: "pkinvite-" + body.pickem_group });
+  return reply(200, { sent });
+}
+
 async function crashNote(admin: Admin, caller: string, body: { pickem_group?: string; uid?: string }) {
   if (!isId(body.pickem_group)) return reply(400, { error: "pickem_group is wrong." });
   const uid = isId(body.uid) ? String(body.uid) : caller;
@@ -418,6 +434,7 @@ Deno.serve(async (req) => {
   let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string; rsvp_event?: string; contest_id?: string; kind?: string; squares_pool?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
   if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
+  if (body.pickem_group && body.kind === "invite") return await pkInviteNote(admin, caller, body);
   if (body.pickem_group) return await crashNote(admin, caller, body);
   if (body.wolf_round) return await wolfNote(admin, caller, body);
   if (body.rsvp_event) return await rsvpNote(admin, caller, body);
