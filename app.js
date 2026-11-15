@@ -748,7 +748,7 @@ function myContests() {
 function myContestsBox() {
   const rows = myContests();
   if (!rows.length) return "";
-  return `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Your contests</h2><span class="sub">${rows.length} active</span></div>
+  return `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Your Contests</h2><span class="sub">${rows.length} active</span></div>
     <div class="cards">${rows.map(({ c, n, mine, need }) => `<article class="card wfround" data-act="ctFromMine" data-id="${c.id}">
       <div class="slip-top"><span class="cat">Contest</span><span class="sub">${c.sponsor === S.me ? "You're sponsoring" : "From " + esc(personName(c.sponsor) || "a friend")} · ${mine ? `you have ${mine} entr${mine === 1 ? "y" : "ies"}` : "no entries from you"} · pot ${n * c.points}</span></div>
       <h3>${esc(c.title)}</h3>${need ? `<span class="ctneed">${esc(need)}</span>` : ""}<span class="sub">${ctStageLine(c)}</span></article>`).join("")}</div></div>`;
@@ -2035,7 +2035,7 @@ function renderContests() {
     ${form}${cards ? `<div class="cards">${cards}</div>` : S.ct.form ? "" : `<div class="empty"><p>No contests yet.</p></div>`}</div>`;
 }
 function renderContest() {
-  const c = ctGet(S.ct.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="ctBack">‹ All contests</button></div>`;
+  const c = ctGet(S.ct.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="ctBack">‹ All Contests</button></div>`;
   if (!c) { S.ct.view = null; return renderContests(); }
   const nm = (u) => (u === S.me ? "You" : personName(u) || "Someone");
   const entries = S.ct.entries.filter((x) => x.contest_id === c.id), mine = entries.filter((x) => x.uid === S.me);
