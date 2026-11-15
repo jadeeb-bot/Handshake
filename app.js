@@ -279,7 +279,7 @@ function notifyKind(b) {
   if (b.status === "prove") return s === challenger(b) ? "prove" : null;
   if (b.status === "proved") return s === poster(b) ? "proof" : null;
   if (b.status === "referee") return s === challenger(b) && b.referee ? "referee" : null;
-  if (b.status === "settled") return "final";
+  if (b.status === "settled") return null; // done and done: nothing to tell them
   return null;
 }
 function notifyBtn(b) {
@@ -807,8 +807,10 @@ function sorted(list) {
     stake: (a, b) => stakeOf(b) - stakeOf(a),
     needs: (a, b) => rank(a) - rank(b) || (b.createdAt || 0) - (a.createdAt || 0),
   }[S.sort] || (() => 0);
-  return list.slice().sort(by);
+  return list.slice().sort((a, b) => isDoneCard(a) - isDoneCard(b) || by(a, b));
 }
+// Done and done (or called off, hopeless, expired) never sits above a live prediction.
+const isDoneCard = (b) => (needsMe(b) || canSign(b) || kidNeeds(b) ? 0 : ["settled", "void", "hopeless"].includes(b.status) || expired(b) ? 1 : 0);
 // Active contests I'm part of, with what (if anything) they need from me.
 function myContests() {
   if (!S.ct || S.ct.off) return [];
@@ -942,7 +944,7 @@ function renderFeed() {
   const bets = S.bets.filter((b) => !b.pickem && !b.wolf && !b.contest && !isBlockedBet(b) && !parentOf(b));
   if (!bets.length) return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div></div>`;
   const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
-  const list = bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  const list = bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => isDoneCard(a) - isDoneCard(b) || (b.createdAt || 0) - (a.createdAt || 0));
   const chips = FEED_FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.feedFilter === k}" data-act="feedFilter" data-v="${k}">${l} <span class="mono">${bets.filter((b) => pass(b, k)).length}</span></button>`).join("");
   const empty = S.feedFilter === "crash" ? `<div class="empty"><p>Nothing open to crash right now. Predictions you're already in, or have crashed, don't show here.</p></div>` : `<div class="empty"><p>Nothing here right now.</p></div>`;
   return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div style="display:flex;flex-direction:column;gap:14px"><div class="secthead"><h2>Everyone's predictions</h2><span class="sub">Everything you're allowed to see, newest first</span></div>
