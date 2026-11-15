@@ -1203,7 +1203,7 @@ function pkStandings(g, rows = pkTotals(g.id)) {
   const inCol = S.pk.v3;
   const wk = pkWeekSoFar(g), wkCol = wk.final > 0;
   return `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Wins</th>${wkCol ? `<th class="num" title="Games right this week so far">Wk</th>` : ""}${inCol ? `<th class="num pkinh" title="Picks in this week">In</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
-    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.uid === S.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${wkCol ? `<td class="num${wk.lead.has(r.uid) ? " pklead" : ""}">${wk.right.get(r.uid) ?? 0}${wk.star.has(r.uid) ? "★" : ""}</td>` : ""}${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
+    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><button class="pkname" data-act="pkPeek" data-id="${g.id}" data-u="${r.uid}">${esc(r.name)}</button>${r.uid === S.me ? ` <span class="you">you</span>` : ""}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${wkCol ? `<td class="num${wk.lead.has(r.uid) ? " pklead" : ""}">${wk.right.get(r.uid) ?? 0}${wk.star.has(r.uid) ? "★" : ""}</td>` : ""}${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
     + (wkCol ? `<span class="sub">Wk = games right this week so far (${wk.final} of ${wk.games} games final)${wk.lead.size ? ` · leading: ${esc(listNames([...wk.lead].map((u) => pkName(u))))} (${wk.top} right)` : ""}. Updates within minutes of each game ending; points move when the week is scored.</span>` : "")
     + (inCol ? `<span class="sub">Picks in this week (${esc(weekLabel(nflWeek(Date.now())))}): ${rows.filter((r) => subs.has(r.uid)).length} of ${rows.length}</span>` : "");
 }
@@ -1373,7 +1373,7 @@ function renderPickem() {
   if (graded) {
     const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).sort((a, b) => b.points - a.points || b.correct - a.correct);
     const wk = S.pk.weeks.find((w) => w.group_id === g.id && w.week === v.week);
-    board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}${r.won && r.points > 0 ? " 🏆" : ""}</span></td><td class="num">${r.correct}${r.bonus_right ? "+1★" : ""}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
+    board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><button class="pkname" data-act="pkPeek" data-id="${v.gid}" data-u="${r.uid}">${esc(pkName(r.uid))}</button>${r.won && r.points > 0 ? " 🏆" : ""}</td><td class="num">${r.correct}${r.bonus_right ? "+1★" : ""}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
     board = (wk?.rolled ? `<div class="pkpot">Nobody got half right (best was ${wk.best} of ${wk.games}), so the pot rolled over to next week.</div>` : "")
       + `<div class="table"><table><thead><tr><th>Final</th><th class="num">Right</th><th class="num">TB off</th><th class="num">Pts</th></tr></thead><tbody>${board}</tbody></table></div>`;
   } else {
@@ -1383,7 +1383,7 @@ function renderPickem() {
       return { uid, right: hits.length, bonusHit, score: hits.length + (bonusHit ? 1 : 0) };
     }).sort((a, b) => b.score - a.score);
     const decided = v.games.filter((x) => { const c = coverSide(x); return c && c !== "push"; }).length;
-    board = rows.length ? `<div class="table"><table><thead><tr><th>So far</th><th class="num">Right</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span>${esc(pkName(r.uid))}</span></td><td class="num">${r.right}${r.bonusHit ? "+1★" : ""}</td></tr>`).join("")}</tbody></table></div>`
+    board = rows.length ? `<div class="table"><table><thead><tr><th>So far</th><th class="num">Right</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><button class="pkname" data-act="pkPeek" data-id="${v.gid}" data-u="${r.uid}">${esc(pkName(r.uid))}</button></td><td class="num">${r.right}${r.bonusHit ? "+1★" : ""}</td></tr>`).join("")}</tbody></table></div>`
       + (S.pk.v2 && decided ? `<span class="sub">${decided} game${decided === 1 ? "" : "s"} decided so far. The winner needs at least half of the week's games right.</span>` : "")
       : `<span class="sub">No entries yet this week.</span>`;
   }
@@ -2525,13 +2525,42 @@ function renderReports() {
     ${done.length ? `<span class="lab">Handled</span><div class="cards">${done.map(card).join("")}</div>` : ""}</div>`;
 }
 
+/* ---------- Pick 'em: tap a name to see that person's picks (locked games only) ---------- */
+function pkPeekSheet() {
+  const k = S.pkPeek; if (!k || !S.pk) return "";
+  const v = S.pkView && S.pkView.gid === k.gid && S.pkView.games ? S.pkView : null;
+  const week = v ? v.week : nflWeek(Date.now());
+  const games = (v ? v.games : S.pk.weekGames || []).filter((x) => x.home_spread != null).slice().sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
+  const picks = (v ? v.picks : (S.pk.wkPicks || []).filter((p) => p.group_id === k.gid)).filter((p) => p.uid === k.uid);
+  const bonus = (v ? v.bonus : (S.pk.wkBonus || []).filter((b) => b.group_id === k.gid)).find((b) => b.uid === k.uid)?.game_id;
+  const tb = v ? v.tbs.find((t) => t.uid === k.uid)?.guess : null;
+  const me = k.uid === S.me, name = me ? "Your" : esc(pkName(k.uid)) + "'s";
+  let right = 0, wrong = 0, push = 0, hidden = 0;
+  const rows = games.map((g) => {
+    const locked = pkLocked(g, games), p = picks.find((x) => x.game_id === g.id), hs = +g.home_spread;
+    const label = (sd) => `${esc(nick(sd === "home" ? g.home : g.away))} <b class="mono">${lineTxt(sd === "home" ? hs : -hs)}</b>`;
+    const matchup = `${esc(nick(g.away))} at ${esc(nick(g.home))}`;
+    if (!locked && !me) { hidden++; return `<div class="peekrow"><span>${matchup}</span><span class="sub">Hidden until it locks</span></div>`; }
+    if (!p) return `<div class="peekrow"><span>${matchup}</span><span class="sub">No pick</span></div>`;
+    const c = coverSide(g), res = !c ? "" : c === "push" ? "res-push" : c === p.side ? "res-win" : "res-lose";
+    if (res === "res-win") right++; else if (res === "res-lose") wrong++; else if (res === "res-push") push++;
+    return `<div class="peekrow"><span>${matchup}${bonus === g.id ? ' <span title="Bonus game: counts double">★</span>' : ""}</span><span class="peekpick ${res}">${label(p.side)}${res === "res-win" ? " ✓" : res === "res-lose" ? " ✗" : res === "res-push" ? " · push" : ""}</span></div>`;
+  }).join("");
+  const tally = right + wrong + push ? `${right} right · ${wrong} wrong${push ? ` · ${push} push` : ""}${bonus && picks.some((p) => p.game_id === bonus && coverSide(games.find((x) => x.id === bonus) || {}) === p.side) ? " · ★ bonus right" : ""}` : "No results yet.";
+  return `<div class="modsheet" role="dialog" aria-label="${name} picks"><div class="card">
+    <h3>${name} picks · ${esc(weekLabel(week))}</h3>
+    <span class="sub">${tally}${tb != null ? ` · tiebreaker ${tb}` : ""}${hidden ? ` · ${hidden} still hidden until they lock` : ""}</span>
+    <div class="peek">${rows || `<span class="sub">No games this week.</span>`}</div>
+    <div class="acts"><button class="btn ghost" data-act="pkPeekClose">Close</button></div></div></div>`;
+}
+
 function render() {
   renderLedger(); renderBell();
   for (const t of ["board", "feed", "rivals", "vegas", "golf", "rsvp", "contest", "squares", "quanto"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   try { const net = rivals().reduce((t, r) => t + (r.current || 0), 0), q = $("#quantoSub"); if (q) q.textContent = net ? (net > 0 ? "you're owed " + pts(net) : "you owe " + pts(-net)) + " net" : "all square"; } catch (e) {}
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = (S.tab === "reports" ? renderReports() : S.tab === "quanto" ? renderQuanto() : S.tab === "squares" ? renderSquares() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard()) + modSheet();
+  v.innerHTML = (S.tab === "reports" ? renderReports() : S.tab === "quanto" ? renderQuanto() : S.tab === "squares" ? renderSquares() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard()) + modSheet() + pkPeekSheet();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -2727,6 +2756,8 @@ const ACT = {
     toast(el.dataset.v === "dismiss" ? "Dismissed." : el.dataset.v === "suspend" ? "Removed, and the poster is suspended." : "Removed.");
   },
   pkCrash: (el) => pkCrash(el.dataset.id),
+  pkPeek: (el) => { S.pkPeek = { gid: el.dataset.id, uid: el.dataset.u }; render(); },
+  pkPeekClose: () => { S.pkPeek = null; render(); },
   pkGoWeek: (el) => pkOpen(S.pkView.gid, el.dataset.v),
   pkInvSend: (el) => pkInvSend(el.dataset.id),
   pkInvAnswer: (el) => pkInvAnswer(el.dataset.id, el.dataset.v === "1"),
@@ -3494,7 +3525,7 @@ setInterval(() => {
 /* ---------- Take it to the Top: a floating button once you've scrolled down ---------- */
 {
   const btn = $("#toTop");
-  const update = () => { btn.hidden = window.scrollY < 500 || !!S.mod; };
+  const update = () => { btn.hidden = window.scrollY < 500 || !!S.mod || !!S.pkPeek; };
   window.addEventListener("scroll", update, { passive: true });
   btn.addEventListener("click", () => {
     const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
