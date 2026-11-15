@@ -191,7 +191,7 @@ function renderLedger() {
   $("#recordSub").textContent = dec ? Math.round((t.w / dec) * 100) + "% right" + (t.t ? ", " + t.t + (t.t === 1 ? " tie" : " ties") : "") : "No decided calls yet";
   $("#inPlay").textContent = t.live;
   $("#inPlaySub").textContent = t.live ? pts(t.atStake) + " riding on them" : "Nothing open right now";
-  const need = S.bets.filter((b) => needsMe(b) || canSign(b)).length + myContests().filter((x) => x.need).length;
+  const need = S.bets.filter((b) => needsMe(b) || canSign(b)).length + myContests().filter((x) => x.need).length + myPickem().filter((x) => x.need).length;
   const nc = $("#needCount"); nc.hidden = !need; nc.textContent = need;
   const cc = S.bets.filter(crashable).length + (S.pk?.groups || []).filter((g) => pkMyInvite(g.id)).length;
   const ce = $("#crashCount"); ce.hidden = !cc; ce.textContent = cc;
@@ -753,6 +753,31 @@ function myContestsBox() {
       <div class="slip-top"><span class="cat">Contest</span><span class="sub">${c.sponsor === S.me ? "You're sponsoring" : "From " + esc(personName(c.sponsor) || "a friend")} · ${mine ? `you have ${mine} entr${mine === 1 ? "y" : "ies"}` : "no entries from you"} · pot ${n * c.points}</span></div>
       <h3>${esc(c.title)}</h3>${need ? `<span class="ctneed">${esc(need)}</span>` : ""}<span class="sub">${ctStageLine(c)}</span></article>`).join("")}</div></div>`;
 }
+// My Pick 'em All! groups for the Mine tab, with this week's status.
+function myPickem() {
+  if (!S.pk || S.pk.off) return [];
+  const games = (S.pk.weekGames || []).filter((x) => x.home_spread != null);
+  const open = games.filter((x) => !pkLocked(x, games));
+  return S.pk.groups.filter((g) => pkIsMember(g.id)).map((g) => {
+    const rows = pkTotals(g.id), i = rows.findIndex((r) => r.uid === S.me), me = rows[i] || { points: 0, won: 0 };
+    const subs = new Set(S.pk.subs.filter((x) => x.group_id === g.id).map((x) => x.uid));
+    const inN = rows.filter((r) => subs.has(r.uid)).length;
+    const lock = open.length ? Math.min(...open.map((x) => pkLockAt(x, games))) : null;
+    const need = S.pk.v3 && open.length && !subs.has(S.me) ? "Your picks aren't in yet" : "";
+    const reqs = g.created_by === S.me ? S.pk.requests.filter((q) => q.group_id === g.id && q.status === "pending").length : 0;
+    return { g, rank: i + 1, n: rows.length, me, inN, mineIn: subs.has(S.me), lock, need: need || (reqs ? `${reqs} crash request${reqs === 1 ? "" : "s"}` : ""), rolled: S.pk.carry.filter((c) => c.group_id === g.id).length };
+  }).sort((a, b) => (!!b.need - !!a.need) || a.g.name.localeCompare(b.g.name));
+}
+const ordinal = (n) => n + (["th", "st", "nd", "rd"][(n % 100 - 20) % 10] || ["th", "st", "nd", "rd"][n % 100] || "th");
+function myPickemBox() {
+  const rows = myPickem();
+  if (!rows.length) return "";
+  return `<div style="display:flex;flex-direction:column;gap:10px"><div class="secthead"><h2>Your Pick 'em All!</h2><span class="sub">${rows.length} group${rows.length === 1 ? "" : "s"}</span></div>
+    <div class="cards">${rows.map(({ g, rank, n, me, inN, mineIn, lock, need, rolled }) => `<article class="card wfround" data-act="pkFromMine" data-id="${g.id}">
+      <div class="slip-top"><span class="cat">Pick 'em All!</span><span class="sub">${esc(ordinal(rank))} of ${n} · <span class="${tone(me.points)}">${signed(me.points)} pts</span> · ${me.won} win${me.won === 1 ? "" : "s"}</span></div>
+      <h3>${esc(g.name)}</h3>${need ? `<span class="ctneed">${esc(need)}</span>` : ""}
+      <span class="sub">${esc(weekLabel(nflWeek(Date.now())))}: ${mineIn ? "your picks are in" : lock ? "picks lock " + esc(lockLabel(lock)) : "picks are locked"} · ${inN} of ${n} in${rolled ? ` · 💰 ${rolled * 5} pts rolled over` : ""}</span></article>`).join("")}</div></div>`;
+}
 /* ---------- Quanto: who owes whom right now ---------- */
 function renderQuanto() {
   const rs = rivals().filter((r) => r.current || r.pendingReq);
@@ -781,7 +806,7 @@ function renderQuanto() {
     <span class="sub">Includes predictions, Pick 'em All! and Contests, after past settle-ups. Golf matches settle on their own scorecards.</span></div>`;
 }
 function renderBoard() {
-  const MINE = mineList(), cbox = myContestsBox();
+  const MINE = mineList(), cbox = myContestsBox() + myPickemBox();
   if (!MINE.length) {
     return `<div style="display:flex;flex-direction:column;gap:22px">${cbox}<div class="empty"><h3>No predictions yet</h3><p>Make the first call, or crash someone else's from the Everyone tab. Your predictions show here once they're made, ready for both sides to shake on.</p><button class="btn primary" data-act="new">Make a prediction</button></div></div>`;
   }
@@ -1034,7 +1059,7 @@ const pkIsMember = (id) => !!S.me && pkMembers(id).some((m) => m.uid === S.me);
 const pkName = (uid) => personName(uid) || "Someone";
 
 async function loadPickem() {
-  const [g, m, r, w, c, led, car, req, sub, inv] = await Promise.all([
+  const [g, m, r, w, c, led, car, req, sub, inv, wk] = await Promise.all([
     sb.from("pickem_groups").select("id,name,created_by,created_at").order("created_at"),
     sb.from("pickem_members").select("*"),
     sb.from("pickem_results").select("*"),
@@ -1045,6 +1070,7 @@ async function loadPickem() {
     sb.from("pickem_crash_requests").select("*"),
     sb.from("pickem_submissions").select("*").eq("week", nflWeek(Date.now())),
     sb.from("pickem_invites").select("*"),
+    sb.from("vegas_lines").select("id,starts_at,home_spread").gte("starts_at", new Date(Date.parse(nflWeek(Date.now()) + "T00:00:00Z") - DAY).toISOString()).lt("starts_at", new Date(Date.parse(nflWeek(Date.now()) + "T00:00:00Z") + 8 * DAY).toISOString()),
   ]);
   if (g.error) { S.pk = { ...S.pk, off: true }; return; }
   // before update-pickem-2.sql runs, the ledger is missing: fall back to weekly results
@@ -1052,7 +1078,8 @@ async function loadPickem() {
   S.pk = { off: false, groups: g.data || [], members: m.data || [], results: r.data || [], weeks: w.data || [],
     codes: new Map((c.data || []).map((x) => [x.group_id, x.code])), ledger, carry: car.error ? [] : car.data || [],
     requests: req.error ? [] : req.data || [], v2: !led.error,
-    subs: sub.error ? [] : sub.data || [], v3: !sub.error, invites: inv.error ? [] : inv.data || [], v4: !inv.error };
+    subs: sub.error ? [] : sub.data || [], v3: !sub.error, invites: inv.error ? [] : inv.data || [], v4: !inv.error,
+    weekGames: (wk.data || []).filter((x) => nflWeek(x.starts_at) === nflWeek(Date.now())) };
 }
 function pkTotals(gid) {
   const rows = new Map(pkMembers(gid).map((m) => [m.uid, { uid: m.uid, name: pkName(m.uid), points: 0, won: 0, weeks: 0 }]));
@@ -2319,6 +2346,7 @@ const ACT = {
   pkCloseInvite: () => { S.pkInviting = null; render(); },
   pkCopyInvite: (el) => copy(pkInviteText(pkGroup(el.dataset.id)), "Invite copied. Paste it into your group text."),
   pkOpen: (el) => pkOpen(el.dataset.id),
+  pkFromMine: (el) => { liveUnsub("rsvp"); liveUnsub("contest"); liveUnsub("squares"); wfUnsub(); S.tab = "feed"; pkOpen(el.dataset.id); window.scrollTo({ top: $("#view").offsetTop - 10, behavior: "smooth" }); },
   pkBack: () => { S.pkView = null; render(); },
   pkWeek: (el) => pkOpen(S.pkView.gid, weekShift(S.pkView.week, +el.dataset.v)),
   pkPick: (el) => pkPick(S.pkView.gid, el.dataset.id, el.dataset.v),
