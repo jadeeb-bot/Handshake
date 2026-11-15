@@ -139,7 +139,13 @@ const crashable = (b) => ["proposed", "open"].includes(b.status) && !expired(b) 
 /* other one-on-ones from the same group call: same caller, call and deadline, made together */
 const siblings = (b) => (b.parentId || !side(b) ? [] : S.bets.filter((x) => x.id !== b.id && !x.parentId && x.a.uid === b.a.uid && x.title === b.title
   && x.due === b.due && Math.abs((x.createdAt || 0) - (b.createdAt || 0)) < 10 * 60e3 && side(x) && ["open", "disputed"].includes(x.status) && !x.report));
-const mineList = () => S.bets.filter((b) => side(b) || canSign(b) || negSide(b) || isRef(b));
+const involved = (b) => side(b) || canSign(b) || negSide(b) || isRef(b);
+const parentOf = (b) => (b.parentId ? S.bets.find((x) => x.id === b.parentId) || null : null);
+// One card per prediction: a crash you're in shows on its prediction's card.
+const mineList = () => { const keep = new Set(); for (const b of S.bets) if (involved(b)) keep.add(parentOf(b) || b); return S.bets.filter((b) => keep.has(b)); };
+// The crashes on a prediction that involve me (shown inside its card).
+const myKids = (b) => (b.parentId ? [] : liveKids(b).filter(involved));
+const kidNeeds = (b) => myKids(b).some((k) => needsMe(k) || canSign(k));
 
 /* ---------- scoring ---------- */
 function mine() {
@@ -254,7 +260,7 @@ function statusChip(b) {
 function sigLine(b, k) {
   const ok = k === "a" || b.b?.signed;
   const nm = nameOf(b, k);
-  const label = k === "b" && b.b?.proxy && !b.b?.uid ? "in person" : b.parentId ? (k === "a" ? "crashed in" : "accepted") : k === "a" ? "called it" : "against";
+  const label = k === "b" && b.b?.proxy && !b.b?.uid ? "in person" : b.parentId ? (k === "a" ? "crashed in" : "accepted") : k === "a" ? "predicted it" : "against";
   return `<div class="sig"><span class="hand ${ok ? "" : "blank"}">${ok ? esc(nm) : "no handshake yet"}</span><small>${label}</small></div>`;
 }
 function crashLine(b) {
@@ -432,7 +438,43 @@ function setVis(v) {
   $("#visHelp").textContent = VIS[S.vis][1];
 }
 
-function slip(b) {
+/* ---------- one card per prediction: who's on each side, and every matchup ---------- */
+const CR = `<span class="crtag">Crash</span>`;
+// yes = the side of whoever made the prediction; no = the other side
+function matchSides(m) {
+  if (!m.parentId) return { yes: { name: nameOf(m, "a"), uid: m.a?.uid }, no: { name: nameOf(m, "b"), uid: m.b?.uid || m.b?.invited }, crash: null };
+  const ps = m.parentSide || "a", crasher = { name: nameOf(m, "a"), uid: m.a?.uid }, opp = { name: nameOf(m, "b"), uid: m.b?.uid || m.b?.invited };
+  return ps === "a" ? { yes: crasher, no: opp, crash: "yes" } : { yes: opp, no: crasher, crash: "no" };
+}
+function matchLabel(m) {
+  const x = matchSides(m), you = (q) => (q.uid && q.uid === S.me ? "You" : esc(q.name));
+  return `${you(x.yes)}${x.crash === "yes" ? " " + CR : ""} vs ${you(x.no)}${x.crash === "no" ? " " + CR : ""}`;
+}
+function matchStatus(m) {
+  if (m.status === "proposed") return expired(m) ? "Expired" : m.counter ? "Counter offer" : `Waiting for ${(m.b?.uid || m.b?.invited) === S.me || (!m.b?.uid && invitedMe(m)) ? "you" : esc(nameOf(m, "b"))} to shake on it`;
+  if (m.status === "settled") return m.winner === "push" ? "Tie" : `${esc(nameOf(m, m.winner))} won`;
+  return LABEL[m.status] || m.status;
+}
+function sidesBlock(b) {
+  const tagB = b.b?.proxy && !b.b?.uid ? "In person" : b.b?.signed ? "Shook on it" : b.status === "proposed" && !expired(b) ? "Invited · waiting" : "Never shook on it";
+  const yes = [{ n: nameOf(b, "a"), t: "Predicted it" }], no = [{ n: nameOf(b, "b"), t: tagB }];
+  const ks = liveKids(b);
+  for (const k of ks) (((k.parentSide || "a") === "a") ? yes : no).push({ n: nameOf(k, "a"), t: "Crasher" + (k.status === "proposed" && !expired(k) ? " · waiting" : ""), cr: true });
+  const col = (h, list) => `<div class="sidebox"><div class="sidehead">${h}</div>${list.map((x) => `<div class="person"><span class="hand">${esc(x.n)}</span><small class="${x.cr ? "cr" : ""}">${x.t}</small></div>`).join("")}</div>`;
+  const lines = [b, ...ks].map((m) => `<div><span>${matchLabel(m)}</span><span><b>${esc(stakeLabel(m))}</b> <span class="mchip">${matchStatus(m)}</span></span></div>`).join("");
+  const mine = [b, ...ks].filter((m) => side(m)), total = mine.reduce((t, m) => t + stakeOf(m), 0);
+  const sum = mine.length > 1 && total ? `One result settles everything: you're in for ${pts(total)} total across ${mine.length} matchups.` : "One result settles every matchup.";
+  return `<div class="sides">${col("Says yes", yes)}${col("Says no", no)}</div><div class="match">${lines}</div><span class="sub">${sum}</span>`;
+}
+// my net across every matchup on a settled prediction (stamp)
+function netStamp(b) {
+  if (b.status !== "settled") return "";
+  const mine = [b, ...liveKids(b)].filter((m) => side(m) && m.status === "settled");
+  if (!mine.length || mine.some(isOther)) return "";
+  const net = mine.reduce((t, m) => t + (m.winner === "push" ? 0 : m.winner === side(m) ? stakeOf(m) : -stakeOf(m)), 0);
+  return net > 0 ? `<div class="stamp win">+${net}</div>` : net < 0 ? `<div class="stamp">−${-net}</div>` : `<div class="stamp grey">EVEN</div>`;
+}
+function slipParts(b) {
   const s = side(b), o = s ? other(s) : null, p = stakeOf(b);
   const them = s ? esc(nameOf(b, o)) : null;
   let stamp = "";
@@ -473,7 +515,7 @@ function slip(b) {
         note = `Waiting for <b>${them}</b> to shake on it. Send them the link, or tap "We shook on it" if you agreed in person.`;
         acts = S.fixing === b.id ? "" : `<button class="btn" data-act="shook" data-id="${b.id}" ${busy}>We shook on it</button>${notifyBtn(b)}<button class="btn quiet" data-act="fix" data-id="${b.id}">Fix name or number</button><button class="btn quiet danger" data-act="withdraw" data-id="${b.id}" ${busy}>Withdraw</button>`;
       } else if (canSign(b)) {
-        note = `<b>${esc(nameOf(b, "a"))}</b> made this call against <b>${esc(nameOf(b, "b"))}</b>. It's waiting on your handshake.`;
+        note = `<b>${esc(nameOf(b, "a"))}</b> made this prediction against <b>${esc(nameOf(b, "b"))}</b>. It's waiting on your handshake.`;
         acts = S.countering === b.id ? "" : `<button class="btn primary" data-act="sign" data-id="${b.id}" ${busy}>Shake on it!</button><button class="btn" data-act="counter" data-id="${b.id}" ${busy}>Counter stakes</button><button class="btn quiet danger" data-act="decline" data-id="${b.id}" ${busy}>Decline</button>`;
       }
       break;
@@ -497,7 +539,7 @@ function slip(b) {
       break;
     }
     case "disputed":
-      note = `<b>Disputed.</b> ${esc(nameOf(b, b.report?.by || "a"))}'s call wasn't accepted. Talk it out, then record the result again.`;
+      note = `<b>Disputed.</b> ${esc(nameOf(b, b.report?.by || "a"))}'s result wasn't accepted. Talk it out, then record the result again.`;
       if (s && !pick) acts = `${notifyBtn(b)}<button class="btn primary" data-act="pick" data-id="${b.id}" ${busy}>Record result again</button><button class="btn quiet" data-act="callOff" data-id="${b.id}" ${busy}>Call it off</button>`;
       break;
     case "prove": {
@@ -553,7 +595,7 @@ function slip(b) {
 
   let picker = "";
   if (pick && s) {
-    picker = `<div class="picker"><span class="lab">Who called it?</span><div class="acts">
+    picker = `<div class="picker"><span class="lab">Who got it right?</span><div class="acts">
       <button class="btn" data-act="report" data-w="${s}" data-id="${b.id}">I did</button>
       <button class="btn" data-act="report" data-w="${o}" data-id="${b.id}">${them}</button>
       <button class="btn" data-act="report" data-w="push" data-id="${b.id}">Tie</button>
@@ -562,28 +604,41 @@ function slip(b) {
       <span class="sub">If you pick ${siblings(b).length ? "the other side" : them}, it's done and done right away. Otherwise ${siblings(b).length ? "each person" : them} gets 24 hours to confirm or say prove it before any points move.</span>
       <div><button class="btn quiet" data-act="unpick">Cancel</button></div></div>`;
   }
-  const cls = "slip" + (needsMe(b) || canSign(b) ? " attn" : "") + (stamp ? " has-stamp" : "") + (S.fresh === b.id ? " newly" : "");
+  return { s, o, p, them, stamp, note, acts, picker };
+}
+function slipPanels(b) {
+  return `${S.countering === b.id ? counterPanel(b) : ""}${S.fixing === b.id ? fixPanel(b) : ""}${S.extending === b.id ? extendPanel(b) : ""}${proofView(b)}${S.proving === b.id && b.status === "prove" ? proofPanel(b) : ""}${S.objecting === b.id && b.status === "proved" ? objectPanel(b) : ""}${S.notify?.id === b.id && negSide(b) ? notifyPanel(b) : ""}`;
+}
+function slip(b) {
+  if (parentOf(b)) return ""; // shown on its prediction's card
+  const { s, o, p, stamp: stamp0, note, acts, picker } = slipParts(b);
+  const many = liveKids(b).length > 0;
+  const stamp = many ? netStamp(b) || stamp0 : stamp0;
+  const kidBoxes = myKids(b).map((k) => {
+    const q = slipParts(k), pan = slipPanels(k);
+    const n = k.status === "open" ? "" : q.note, a = q.acts;
+    if (!n && !a && !pan && !q.picker) return "";
+    return `<div class="kidbox" id="bet-${k.id}"><span class="lab">${matchLabel(k)}</span>${n ? `<div class="note">${n}</div>` : ""}${a ? `<div class="acts">${a}</div>` : ""}${q.picker}${pan}</div>`;
+  }).join("");
+  const cls = "slip" + (needsMe(b) || canSign(b) || kidNeeds(b) ? " attn" : "") + (stamp ? " has-stamp" : "") + (S.fresh === b.id ? " newly" : "");
   return `<article class="${cls}" id="bet-${b.id}">
     ${stamp}
-    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}${modBtn("prediction", b.id, o ? b[o]?.uid : b.a?.uid)}</div>
-    <h3>${esc(b.title)}</h3>${crashLine(b)}
+    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(kidNeeds(b) && !needsMe(b) && !canSign(b) ? myKids(b).find((k) => needsMe(k) || canSign(k)) : b)}${modBtn("prediction", b.id, o ? b[o]?.uid : b.a?.uid)}</div>
+    <h3>${esc(b.title)}</h3>
+    ${b.parentId ? "" : `<div class="predline"><b>${esc(nameOf(b, "a"))}</b> predicted it</div>`}
     ${b.terms ? `<p class="terms">${esc(b.terms)}</p>` : ""}
     <div class="row">${b.counter && b.status === "proposed"
       ? `<span class="was">${esc(stakeLabel(b))}</span><span class="ctr">Counter</span><span class="stake ${b.counter.kind === "other" ? "text" : ""}">${esc(counterLabel(b.counter))}</span>`
       : isOther(b) ? `<span class="stake text">${esc(stakeLabel(b))}</span>` : `<span class="stake">${p} <small>pts on the line</small></span>`}${dueText(b)}</div>
-    <div class="sigs">${sigLine(b, "a")}${sigLine(b, "b")}</div>
+    ${many ? sidesBlock(b) : `<div class="sigs">${sigLine(b, "a")}${sigLine(b, "b")}</div>`}
     ${note ? `<div class="note">${note}</div>` : ""}
     ${acts ? `<div class="acts">${acts}</div>` : ""}
     ${picker}
-    ${S.countering === b.id ? counterPanel(b) : ""}
-    ${S.fixing === b.id ? fixPanel(b) : ""}
-    ${S.extending === b.id ? extendPanel(b) : ""}
-    ${proofView(b)}
-    ${S.proving === b.id && b.status === "prove" ? proofPanel(b) : ""}
-    ${S.objecting === b.id && b.status === "proved" ? objectPanel(b) : ""}
-    ${S.notify?.id === b.id && negSide(b) ? notifyPanel(b) : ""}
+    ${slipPanels(b)}
+    ${kidBoxes}
   </article>`;
 }
+
 
 function counterPanel(b) {
   const d = S.counterDraft;
@@ -700,8 +755,8 @@ function message(b, kind) {
     case "final":
       subject = `Handshake: final on ${t}`;
       if (b.winner === "push") body = `Final on ${t}: it's a tie, nothing changes hands. Rematch?`;
-      else if (b.winner === s) body = `Final on ${t}: I called it. ${isOther(b) ? "You owe me: " + st + "." : st + " to me."} Rematch?`;
-      else body = `Final on ${t}: you called it. ${isOther(b) ? "I owe you: " + st + "." : st + " to you."} Well played.`;
+      else if (b.winner === s) body = `Final on ${t}: I got it right. ${isOther(b) ? "You owe me: " + st + "." : st + " to me."} Rematch?`;
+      else body = `Final on ${t}: you got it right. ${isOther(b) ? "I owe you: " + st + "." : st + " to you."} Well played.`;
       break;
     default: subject = `Handshake: ${t}`; body = `${them}, reminder: ${t} for ${st}${due}. It's on Handshake:`;
   }
@@ -738,7 +793,7 @@ function notifyPanel(b) {
 /* ---------- board views ---------- */
 const FILTERS = [["all", "All"], ["needs", "Needs you"], ["live", "In play"], ["done", "Done and done"], ["void", "Called off"]];
 function inFilter(b, f) {
-  if (f === "needs") return needsMe(b) || canSign(b);
+  if (f === "needs") return needsMe(b) || canSign(b) || kidNeeds(b);
   if (f === "live") return isLive(b);
   if (f === "done") return b.status === "settled";
   if (f === "void") return b.status === "void" || b.status === "hopeless" || expired(b);
@@ -836,7 +891,7 @@ function renderQuanto() {
 function renderBoard() {
   const MINE = mineList(), cbox = myContestsBox() + myPickemBox();
   if (!MINE.length) {
-    return `<div style="display:flex;flex-direction:column;gap:22px">${cbox}<div class="empty"><h3>No predictions yet</h3><p>Make the first call, or crash someone else's from the Everyone tab. Your predictions show here once they're made, ready for both sides to shake on.</p><button class="btn primary" data-act="new">Make a prediction</button></div></div>`;
+    return `<div style="display:flex;flex-direction:column;gap:22px">${cbox}<div class="empty"><h3>No predictions yet</h3><p>Make the first prediction, or crash someone else's from the Everyone tab. Your predictions show here once they're made, ready for both sides to shake on.</p><button class="btn primary" data-act="new">Make a prediction</button></div></div>`;
   }
   const list = sorted(MINE.filter((b) => inFilter(b, S.filter)));
   const chips = FILTERS.map(([k, l]) => `<button class="chipbtn" aria-pressed="${S.filter === k}" data-act="filter" data-v="${k}">${l} <span class="mono">${MINE.filter((b) => inFilter(b, k)).length}</span></button>`).join("");
@@ -848,7 +903,7 @@ function feedCard(b) {
   const p = stakeOf(b);
   const vs = b.parentId
     ? `<b>${esc(nameOf(b, "a"))}</b> crashed in backing ${esc(b.backsName || "")}, against <b>${esc(nameOf(b, "b"))}</b>`
-    : `<b>${esc(nameOf(b, "a"))}</b> called it. ${b.status === "proposed" && !expired(b) ? `Waiting for <b>${esc(nameOf(b, "b"))}</b> to shake on it.`
+    : `<b>${esc(nameOf(b, "a"))}</b> predicted it. ${b.status === "proposed" && !expired(b) ? `Waiting for <b>${esc(nameOf(b, "b"))}</b> to shake on it.`
         : b.status === "proposed" ? `<b>${esc(nameOf(b, "b"))}</b> never shook on it.`
         : b.b?.signed ? `<b>${esc(nameOf(b, "b"))}</b> shook on it.`
         : `<b>${esc(nameOf(b, "b"))}</b> passed.`}`;
@@ -862,7 +917,7 @@ function feedCard(b) {
     <h3>${esc(b.title)}</h3>
     <div class="vs">${vs}</div>
     <div class="row">${isOther(b) ? `<span class="stake text">${esc(stakeLabel(b))}</span>` : `<span class="stake" style="font-size:16px">${p} <small>pts</small></span>`}${dueText(b)}</div>
-    ${b.parentId ? "" : crashLine(b)}
+    ${!b.parentId && liveKids(b).length ? sidesBlock(b) : ""}
     ${tail}
   </article>`;
 }
@@ -872,7 +927,7 @@ function crashPanel(b) {
   return `<div class="cpanel">
     <span class="lab">Who are you backing?</span>
     <div class="seg" role="group" aria-label="Side to back">
-      <button type="button" aria-pressed="${sd === "a"}" data-act="crashSide" data-v="a">${names.a}'s call</button>
+      <button type="button" aria-pressed="${sd === "a"}" data-act="crashSide" data-v="a">${names.a}'s prediction</button>
       <button type="button" aria-pressed="${sd === "b"}" data-act="crashSide" data-v="b">${names.b}'s side</button>
     </div>
     ${sd ? `<span class="sub">You'd be up against ${sd === "a" ? names.b : names.a}. They accept before it's on.</span>` : ""}
@@ -884,7 +939,7 @@ function crashPanel(b) {
 }
 const FEED_FILTERS = [["crash", "Open to crash"], ["live", "In play"], ["all", "Everything"]];
 function renderFeed() {
-  const bets = S.bets.filter((b) => !b.pickem && !b.wolf && !b.contest && !isBlockedBet(b));
+  const bets = S.bets.filter((b) => !b.pickem && !b.wolf && !b.contest && !isBlockedBet(b) && !parentOf(b));
   if (!bets.length) return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div></div>`;
   const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
   const list = bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -988,7 +1043,7 @@ function rivalActs(r) {
   const waitingOnMe = r.pendingReq && r.pendingReq.creditor_uid === S.me;
   const btn = r.current > 0 && !waitingOnMe ? `<button class="btn primary" data-act="settle" data-k="${esc(r.key)}">Settle up</button>`
     : r.current < 0 && r.uid && !r.pendingReq ? `<button class="btn primary" data-act="settle" data-k="${esc(r.key)}">I settled up</button>` : "";
-  return `${settleState(r)}<div class="acts">${btn}<button class="btn" data-act="rematch" data-v="${esc(r.name)}" data-uid="${esc(r.uid || "")}">New call against ${esc(r.name)}</button></div>`;
+  return `${settleState(r)}<div class="acts">${btn}<button class="btn" data-act="rematch" data-v="${esc(r.name)}" data-uid="${esc(r.uid || "")}">New prediction against ${esc(r.name)}</button></div>`;
 }
 function renderRivals() {
   const table = standings(), rs = rivals();
@@ -1008,7 +1063,7 @@ function renderRivalsInner(table, rs) {
       ${settledLine}
       <div class="bars" aria-hidden="true"><i class="w" style="width:${(r.w / tot) * 100}%"></i><i class="p" style="width:${(r.t / tot) * 100}%"></i><i class="l" style="width:${(r.l / tot) * 100}%"></i></div>
       <div class="line">${rivalSentence(r)}</div>
-      ${r.live ? `<div class="sub">${r.live} call${r.live === 1 ? "" : "s"} still in play</div>` : ""}
+      ${r.live ? `<div class="sub">${r.live} prediction${r.live === 1 ? "" : "s"} still in play</div>` : ""}
       ${rivalActs(r)}</div>`;
   }).join("");
   return `<div style="display:flex;flex-direction:column;gap:22px">
@@ -1046,7 +1101,7 @@ function vegasCard(g) {
 function renderVegas() {
   if (S.lines === null) { loadLines(); return `<div class="empty"><h3>Calling Vegas…</h3><p>Pulling this week's NFL opening lines.</p></div>`; }
   if (S.linesErr) return `<div class="empty"><h3>No lines yet</h3><p>${esc(S.linesErr)}</p></div>`;
-  const head = `<div class="secthead"><h2>Vegas lines</h2><span class="sub">NFL opening lines. Tap a side to call it against a friend.</span></div>`
+  const head = `<div class="secthead"><h2>Vegas lines</h2><span class="sub">NFL opening lines. Tap a side to predict it against a friend.</span></div>`
     + (S.pk && !S.pk.off ? `<div class="pkbanner"><span><b>Pick 'em All!</b> Run a weekly pool with your group: every game against these spreads.</span><button class="btn" data-act="pkGo">Go</button></div>` : "");
   if (!S.lines.length) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>No upcoming games with lines yet. New lines come in every morning.</p></div></div>`;
   let day = "", out = "";
@@ -2702,7 +2757,7 @@ const ACT = {
   sendObject: (el) => sendObject(byId(el.dataset.id)),
   refPick: (el) => {
     const b = byId(el.dataset.id), w = el.dataset.w;
-    call("referee_pick", { p_id: el.dataset.id, p_winner: w }, w === "push" ? "Called it a tie. Thanks, ref." : nameOf(b, w) + " wins. Thanks, ref.", el.dataset.id);
+    call("referee_pick", { p_id: el.dataset.id, p_winner: w }, w === "push" ? "It's a tie. Thanks, ref." : nameOf(b, w) + " wins. Thanks, ref.", el.dataset.id);
   },
   callOff: (el) => call("report_result", { p_id: el.dataset.id, p_winner: "void" }, "Asked to call it off", el.dataset.id),
   counter: (el) => { S.countering = el.dataset.id; S.counterDraft = {}; S.notify = null; render(); },

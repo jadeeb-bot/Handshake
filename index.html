@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Handshake</title>
-<meta name="description" content="Friendly predictions with your friends. Call it, shake on it, take it to the bank.">
+<meta name="description" content="Friendly predictions with your friends. Predict it, shake on it, take it to the bank.">
 <!-- Link previews in Messages, WhatsApp, Slack, etc. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Handshake">
 <meta property="og:title" content="🤝 Handshake">
-<meta property="og:description" content="Call it. Shake on it. Take it to the bank. Friendly predictions with your friends.">
+<meta property="og:description" content="Predict it. Shake on it. Take it to the bank. Friendly predictions with your friends.">
 <meta property="og:url" content="https://handshake-rho-ten.vercel.app/">
 <meta property="og:image" content="https://handshake-rho-ten.vercel.app/og.png">
 <meta property="og:image:width" content="1200">
@@ -106,6 +106,19 @@ button{cursor:pointer}
 .secthead .acts{display:flex;align-items:center;gap:6px}
 .rname .modbtn{margin-left:auto}
 .pkresults{display:flex;flex-direction:column;gap:6px}.pkres{display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;background:var(--slip);border:0;border-radius:10px;box-shadow:var(--shadow);padding:8px 12px;font:inherit;font-size:14px;color:var(--ink);cursor:pointer}.pkres span{color:var(--muted);font-size:13px}
+.predline{font-size:13px;color:var(--muted);margin-top:-6px}.predline b{color:var(--ink)}
+.sides{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:2px}
+.sidebox{display:flex;flex-direction:column;gap:6px;min-width:0}
+.sidehead{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;border-bottom:1px solid var(--ink);padding-bottom:4px}
+.person{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:0 6px;min-width:0}.person .hand{flex:1 1 70px;min-width:0}
+.person .hand{font-family:var(--f-hand);font-size:24px;line-height:1.05;color:var(--pen);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transform:rotate(-2deg);transform-origin:left bottom}
+.person small{font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);white-space:nowrap}
+.person small.cr,.crtag{color:#d9822b;font-weight:700}
+.crtag{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em}
+.match{display:flex;flex-direction:column;gap:5px;font-size:13.5px;border-top:1px dashed var(--line);padding-top:8px}
+.match>div{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.mchip{font-size:11px;font-weight:700;border-radius:999px;padding:1px 8px;background:color-mix(in srgb,var(--ink) 10%,transparent)}
+.kidbox{display:flex;flex-direction:column;gap:8px;border-top:1px dashed var(--line);padding-top:10px}
 .sqbad{color:var(--stamp);font-weight:600}
 .sqtabs{display:flex;flex-wrap:wrap;gap:6px}
 .sqboard{display:flex;flex-direction:column;gap:2px;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:8px}
@@ -377,7 +390,7 @@ a.btn.primary{color:var(--slip)}
   <header class="mast">
     <div>
       <h1 class="brand">handshake<span>.</span><small class="counting" id="predCount" hidden></small></h1>
-      <p class="tag">Call it. Shake on it. Take it to the bank.</p>
+      <p class="tag">Predict it. Shake on it. Take it to the bank.</p>
     </div>
     <div class="acts">
       <button class="btn bell" id="bellBtn" data-act="bell" hidden aria-label="Activity"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg><span class="count" id="bellCount" hidden></span></button>

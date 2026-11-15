@@ -1,7 +1,7 @@
 {
   "name": "Handshake",
   "short_name": "Handshake",
-  "description": "Call it. Shake on it. Take it to the bank.",
+  "description": "Predict it. Shake on it. Take it to the bank.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
