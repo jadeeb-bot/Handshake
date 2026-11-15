@@ -2246,7 +2246,7 @@ function renderSquaresPool() {
   if (!p) { S.sq.view = null; return renderSquares(); }
   const isOrig = p.originator === S.me, member = sqMember(p), open = p.status === "open";
   const claims = sqOf("claims", p.id), byNum = new Map(claims.map((c) => [c.square, c])), sel = S.sq.sel || [];
-  const games = sqOf("games", p.id), gi = Math.min(S.sq.view.game || 0, games.length - 1), g = games[gi], line = g && S.sq.lines.get(g.game_id);
+  const games = sqOf("games", p.id);
   const results = sqOf("results", p.id), wins = new Map();
   for (const r of results) wins.set(r.square, (wins.get(r.square) || 0) + r.points);
   const drawn = !!p.digits_home;
@@ -2266,8 +2266,6 @@ function renderSquaresPool() {
   }
   if (isOrig) for (const r of sqOf("crash", p.id).filter((x) => x.status === "pending"))
     out += `<div class="rvvenue"><span><b>${esc(sqWho(r.uid))}</b> asks: can I crash?</span><span class="acts"><button class="btn primary" data-act="sqAnswer" data-id="${r.uid}" data-v="1">Let them in</button><button class="btn ghost" data-act="sqAnswer" data-id="${r.uid}" data-v="0">No</button></span></div>`;
-  // game picker (the grid is the same for every game; the labels follow the game)
-  if (games.length > 1) out += `<div class="sqtabs">${games.map((x, i) => { const l = S.sq.lines.get(x.game_id); return `<button class="btn ${i === gi ? "" : "ghost"}" data-act="sqGame" data-v="${i}">${esc(nick(l?.away))} at ${esc(nick(l?.home))}</button>`; }).join("")}</div>`;
   // the grid
   const dH = (c) => (drawn ? p.digits_home[c] : "?"), dA = (r) => (drawn ? p.digits_away[r] : "?");
   let grid = `<div class="sqcorner"></div>`;
@@ -2281,7 +2279,10 @@ function renderSquaresPool() {
         <span class="sqn">${n}</span><span class="sqname">${cl ? esc(cl.unsold ? "—" : sqFirst(cl.uid)) : ""}</span>${w ? `<span class="sqw">🏆</span>` : ""}</${tap ? "button" : "div"}>`;
     }
   }
-  out += `<div class="sqboard"><div class="sqhome">${esc(line ? line.home : "Home")} →</div><div class="sqmid"><div class="sqaway">${esc(line ? line.away : "Visitors")} ↓</div><div class="sqgrid">${grid}</div></div></div>`;
+  // one grid for every game: list all the home teams across the top and all the visitors down the side
+  const gl = games.map((x) => S.sq.lines.get(x.game_id)).filter(Boolean), many = gl.length > 1;
+  const homes = gl.length ? gl.map((l) => (many ? nick(l.home) : l.home)).join(" · ") : "Home", aways = gl.length ? gl.map((l) => (many ? nick(l.away) : l.away)).join(" · ") : "Visitors";
+  out += `<div class="sqboard"><div class="sqhome">${esc(homes)} →</div><div class="sqmid"><div class="sqaway">${esc(aways)} ↓</div><div class="sqgrid">${grid}</div></div></div>${many ? `<span class="sub">Same grid for every game: columns are each game's home team, rows its visiting team.</span>` : ""}`;
   // claim / release bar
   if (open && member) {
     const toClaim = sel.filter((n) => !byNum.get(n)), toFree = sel.filter((n) => byNum.get(n)?.uid === S.me), mineN = claims.filter((c) => c.uid === S.me).length;
@@ -2438,7 +2439,6 @@ const ACT = {
   sqCreate: () => sqCreate(),
   sqOpen: (el) => sqOpen(el.dataset.id),
   sqBack: () => { liveUnsub("squares"); S.sq.view = null; S.sq.drawArm = false; loadSquares().then(render); render(); },
-  sqGame: (el) => { S.sq.view.game = +el.dataset.v; render(); },
   sqCell: (el) => { const n = +el.dataset.v, s = S.sq.sel || (S.sq.sel = []); const i = s.indexOf(n); i >= 0 ? s.splice(i, 1) : s.push(n); render(); },
   sqClear: () => { S.sq.sel = []; render(); },
   sqClaim: async () => { const p = sqGet(S.sq.view.id), taken = new Set(sqOf("claims", p.id).map((c) => c.square)), want = S.sq.sel.filter((n) => !taken.has(n));
