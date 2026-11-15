@@ -845,13 +845,13 @@ function myPickem() {
   const games = (S.pk.weekGames || []).filter((x) => x.home_spread != null);
   const open = games.filter((x) => !pkLocked(x, games));
   return S.pk.groups.filter((g) => pkIsMember(g.id)).map((g) => {
-    const rows = pkTotals(g.id), i = rows.findIndex((r) => r.uid === S.me), me = rows[i] || { points: 0, won: 0 };
+    const wk = pkWeekSoFar(g), rows = pkOrder(g, pkTotals(g.id), wk), i = rows.findIndex((r) => r.uid === S.me), me = rows[i] || { points: 0, won: 0 };
     const subs = new Set(S.pk.subs.filter((x) => x.group_id === g.id).map((x) => x.uid));
     const inN = rows.filter((r) => subs.has(r.uid)).length;
     const lock = open.length ? Math.min(...open.map((x) => pkLockAt(x, games))) : null;
     const need = S.pk.v3 && open.length && !subs.has(S.me) ? "Your picks aren't in yet" : "";
     const reqs = g.created_by === S.me ? S.pk.requests.filter((q) => q.group_id === g.id && q.status === "pending").length : 0;
-    return { g, rank: i + 1, n: rows.length, me, inN, mineIn: subs.has(S.me), lock, need: need || (reqs ? `${reqs} crash request${reqs === 1 ? "" : "s"}` : ""), rolled: S.pk.carry.filter((c) => c.group_id === g.id).length };
+    return { g, rank: i >= 0 ? pkRank(rows, i, wk) : rows.length, n: rows.length, me, inN, mineIn: subs.has(S.me), lock, need: need || (reqs ? `${reqs} crash request${reqs === 1 ? "" : "s"}` : ""), rolled: S.pk.carry.filter((c) => c.group_id === g.id).length };
   }).sort((a, b) => (!!b.need - !!a.need) || a.g.name.localeCompare(b.g.name));
 }
 const ordinal = (n) => n + (["th", "st", "nd", "rd"][(n % 100 - 20) % 10] || ["th", "st", "nd", "rd"][n % 100] || "th");
@@ -1197,13 +1197,25 @@ function pkResults(g) {
   if (!weeks.length) return `<span class="sub">No weeks scored yet. Results show here after Monday night each week.</span>`;
   return `<div class="pkresults">${weeks.map((w) => `<button class="pkres" data-act="pkGoWeek" data-v="${esc(w.week)}"><b>${esc(weekLabel(w.week))}</b><span>${pkWeekLine(g, w)}</span></button>`).join("")}</div>`;
 }
+// Order: this week's games right (bonus counts double) once any game is final, then season points and wins.
+function pkOrder(g, rows, wk = pkWeekSoFar(g)) {
+  if (!wk.final) return rows;
+  const sc = (u) => (wk.right.get(u) || 0) + (wk.star.has(u) ? 1 : 0);
+  return rows.slice().sort((a, b) => sc(b.uid) - sc(a.uid) || b.points - a.points || b.won - a.won);
+}
+// Rank with ties sharing a place (by this week's score once games are final, else by points).
+function pkRank(rows, i, wk) {
+  const key = (r) => (wk && wk.final ? (wk.right.get(r.uid) || 0) + (wk.star.has(r.uid) ? 1 : 0) : r.points);
+  return 1 + rows.filter((r) => key(r) > key(rows[i])).length;
+}
 // The group's overall standings (pool points, weeks won, this week's picks in).
 function pkStandings(g, rows = pkTotals(g.id)) {
   const subs = new Set(S.pk.subs.filter((x) => x.group_id === g.id).map((x) => x.uid));
   const inCol = S.pk.v3;
   const wk = pkWeekSoFar(g), wkCol = wk.final > 0;
-  return `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Wins</th>${wkCol ? `<th class="num" title="Games right this week so far">Wk</th>` : ""}${inCol ? `<th class="num pkinh" title="Picks in this week">In</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
-    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><button class="pkname" data-act="pkPeek" data-id="${g.id}" data-u="${r.uid}">${esc(r.name)}</button>${r.uid === S.me ? ` <span class="you">you</span>` : ""}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${wkCol ? `<td class="num${wk.lead.has(r.uid) ? " pklead" : ""}">${wk.right.get(r.uid) ?? 0}${wk.star.has(r.uid) ? "★" : ""}</td>` : ""}${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
+  rows = pkOrder(g, rows, wk);
+  return `<div class="table"><table><thead><tr><th>Player</th>${wkCol ? `<th class="num" title="Games right this week so far">Wk</th>` : ""}<th class="num">Points</th><th class="num">Wins</th>${inCol ? `<th class="num pkinh" title="Picks in this week">In</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
+    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${pkRank(rows, i, wk)}</span><button class="pkname" data-act="pkPeek" data-id="${g.id}" data-u="${r.uid}">${esc(r.name)}</button>${r.uid === S.me ? ` <span class="you">you</span>` : ""}</td>${wkCol ? `<td class="num${wk.lead.has(r.uid) ? " pklead" : ""}">${wk.right.get(r.uid) ?? 0}${wk.star.has(r.uid) ? "★" : ""}</td>` : ""}<td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
     + (wkCol ? `<span class="sub">Wk = games right this week so far (${wk.final} of ${wk.games} games final)${wk.lead.size ? ` · leading: ${esc(listNames([...wk.lead].map((u) => pkName(u))))} (${wk.top} right)` : ""}. Updates within minutes of each game ending; points move when the week is scored.</span>` : "")
     + (inCol ? `<span class="sub">Picks in this week (${esc(weekLabel(nflWeek(Date.now())))}): ${rows.filter((r) => subs.has(r.uid)).length} of ${rows.length}</span>` : "");
 }
@@ -2540,7 +2552,7 @@ function pkAllSheet() {
   const games = (v ? v.games : S.pk.weekGames || []).filter((x) => x.home_spread != null).slice().sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
   const picks = v ? v.picks : (S.pk.wkPicks || []).filter((p) => p.group_id === k.gid);
   const bonus = v ? v.bonus : (S.pk.wkBonus || []).filter((b) => b.group_id === k.gid);
-  const people = pkTotals(k.gid).map((r) => r.uid);
+  const people = (v ? pkTotals(k.gid) : pkOrder(g, pkTotals(k.gid))).map((r) => r.uid);
   const rows = games.map((gm) => {
     const locked = pkLocked(gm, games), c = coverSide(gm);
     const cells = people.map((u) => {
