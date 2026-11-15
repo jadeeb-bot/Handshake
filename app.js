@@ -3457,6 +3457,18 @@ $("#codeForm").addEventListener("submit", async (e) => {
   btn.disabled = false;
   await enter();
 });
+/* ---------- Take it to the Top: a floating button once you've scrolled down ---------- */
+{
+  const btn = $("#toTop");
+  const update = () => { btn.hidden = window.scrollY < 500 || !!S.mod; };
+  window.addEventListener("scroll", update, { passive: true });
+  btn.addEventListener("click", () => {
+    const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: smooth ? "smooth" : "auto" });
+  });
+  update();
+}
+
 $("#nameForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#nameErr"); err.hidden = true;

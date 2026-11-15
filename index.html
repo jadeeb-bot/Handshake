@@ -119,6 +119,9 @@ button{cursor:pointer}
 .match>div{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .mchip{font-size:11px;font-weight:700;border-radius:999px;padding:1px 8px;background:color-mix(in srgb,var(--ink) 10%,transparent)}
 .kidbox{display:flex;flex-direction:column;gap:8px;border-top:1px dashed var(--line);padding-top:10px}
+.totop{position:fixed;right:calc(14px + env(safe-area-inset-right,0px));bottom:calc(64px + env(safe-area-inset-bottom,0px));z-index:50;border:0;border-radius:999px;padding:9px 14px;font:inherit;font-size:13px;font-weight:700;background:var(--ink);color:var(--slip);box-shadow:0 4px 14px rgba(0,0,0,.28);cursor:pointer;opacity:.92;transition:opacity .2s,transform .2s}
+.totop:hover{opacity:1}.totop[hidden]{display:none}
+@media (prefers-reduced-motion:reduce){.totop{transition:none}}
 .sqbad{color:var(--stamp);font-weight:600}
 .sqtabs{display:flex;flex-wrap:wrap;gap:6px}
 .sqboard{display:flex;flex-direction:column;gap:2px;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:8px}
@@ -534,6 +537,7 @@ a.btn.primary{color:var(--slip)}
   </footer>
 </div>
 <div class="toast" id="toast" hidden role="status"></div>
+<button class="totop" id="toTop" type="button" aria-label="Take it to the top" hidden>↑ Take it to the Top</button>
 <script src="supabase.js"></script>
 <script src="config.js"></script>
 <script type="module" src="app.js"></script>
