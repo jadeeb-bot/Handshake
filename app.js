@@ -109,7 +109,7 @@ const stakeOf = (b) => (isOther(b) ? 0 : Math.max(0, Math.round(+b.points || 0))
 const stakeLabel = (b) => (isOther(b) ? b.stakeText || "Bragging rights" : pts(stakeOf(b)));
 const side = (b) => (b.a?.uid && b.a.uid === S.me ? "a" : b.b?.uid && b.b.uid === S.me ? "b" : null);
 const other = (s) => (s === "a" ? "b" : "a");
-const nameOf = (b, s) => (b[s]?.name || "Someone").trim();
+const nameOf = (b, s) => (personName(b[s]?.uid) || b[s]?.name || "Someone").trim();
 const shortNo = (id) => String(id).replace(/-/g, "").slice(-4).toUpperCase();
 const scored = (b) => b.status === "settled" && b.winner;
 /* Prove It!: the person who recorded the result, the one challenging it, and the referee */
@@ -165,7 +165,7 @@ function mine() {
    what this person can see. */
 function standings() {
   if (S.serverStandings) {
-    return S.serverStandings.map((r) => ({ name: r.name || "Someone", score: +r.score || 0, w: r.w || 0, l: r.l || 0, t: r.t || 0, me: !!S.me && r.uid === S.me }))
+    return S.serverStandings.map((r) => ({ name: personName(r.uid) || r.name || "Someone", score: +r.score || 0, w: r.w || 0, l: r.l || 0, t: r.t || 0, me: !!S.me && r.uid === S.me }))
       .sort((a, b) => b.score - a.score || b.w - b.l - (a.w - a.l) || a.name.localeCompare(b.name));
   }
   const m = new Map();
@@ -211,7 +211,8 @@ function rivals() {
   }
   return [...m.values()].sort((a, b) => b.w + b.l + b.t + b.live - (a.w + a.l + a.t + a.live) || b.last - a.last);
 }
-const personName = (uid) => (uid ? S.people.find((p) => p.id === uid)?.name || "" : "");
+const personName = (uid) => (uid ? S.people.find((p) => p.id === uid)?.name || "" : ""); // "First L."
+const personFull = (uid) => (uid ? S.people.find((p) => p.id === uid)?.full || "" : "");
 const initials = (n) => n.split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase();
 
 /* ---------- ledger ---------- */
@@ -273,7 +274,7 @@ function notifyKind(b) {
   if (waitingOnMyCounter(b)) return "counter";
   if (b.status === "proposed" && s === "a") return "invite";
   if (b.status === "proposed") return null;
-  if (b.status === "open") return "remind";
+  if (b.status === "open") return !b.parentId && b.due && b.due <= today() ? "remind" : null; // only once it's decision day; crashes ride on the main one
   if (b.status === "reported" && b.report?.by === s) return "confirm";
   if (b.status === "disputed") return "dispute";
   if (b.status === "prove") return s === challenger(b) ? "prove" : null;
@@ -1229,7 +1230,7 @@ function pkCard(g) {
     const members = new Set(pkMembers(g.id).map((m) => m.uid)), pend = new Set((S.pk.invites || []).filter((x) => x.group_id === g.id && x.status === "pending").map((x) => x.uid));
     const cands = S.people.filter((p) => p.id !== S.me && !members.has(p.id));
     const pick = S.pk.v4 && cands.length ? `<span class="lab">Invite people on Handshake</span><span class="sub">They get a notification and a Join button. No code needed.</span>
-      <div class="rvpeople">${cands.map((p) => pend.has(p.id) ? `<label class="sub">${esc(p.name)} (invited)</label>` : `<label><input type="checkbox" class="pkInv" value="${p.id}"> ${esc(p.name)}</label>`).join("")}</div>
+      <div class="rvpeople">${cands.map((p) => pend.has(p.id) ? `<label class="sub">${esc(p.name)} (invited)</label>` : `<label><input type="checkbox" class="pkInv" value="${p.id}"> ${esc(p.full || p.name)}</label>`).join("")}</div>
       ${cands.some((p) => !pend.has(p.id)) ? `<div class="acts"><button class="btn primary" data-act="pkInvSend" data-id="${g.id}">Send invites</button></div>` : ""}<span class="lab">Or text the invite</span>` : "";
     invite = `<div class="cpanel">${pick}<span class="lab">Invite code <b class="mono">${esc(S.pk.codes.get(g.id))}</b></span><p class="msg" id="pkInviteText">${esc(text)}</p>
       <div class="acts"><button class="btn primary" data-act="pkCopyInvite" data-id="${g.id}">Copy invite</button><a class="btn" href="${esc(smsHref("", text))}">Open Messages</a><button class="btn ghost" data-act="pkCloseInvite">Close</button></div></div>`;
@@ -1553,7 +1554,7 @@ function renderGolf() {
   let form = "";
   if (S.wolf.starting) {
     const f = S.wolf.form;
-    const opts = (sel) => [`<option value="">Pick a player…</option>`, ...S.people.map((p) => `<option value="${p.id}" ${sel === p.id ? "selected" : ""}>${esc(p.name)}${p.id === S.me ? " (you)" : ""}</option>`), `<option value="guest" ${sel === "guest" ? "selected" : ""}>Guest (not on Handshake)</option>`].join("");
+    const opts = (sel) => [`<option value="">Pick a player…</option>`, ...S.people.map((p) => `<option value="${p.id}" ${sel === p.id ? "selected" : ""}>${esc(p.full || p.name)}${p.id === S.me ? " (you)" : ""}</option>`), `<option value="guest" ${sel === "guest" ? "selected" : ""}>Guest (not on Handshake)</option>`].join("");
     const holesFor = (pos) => [1, 2, 3, 4, 5].map((k) => pos + 1 + 4 * (k - 1)).filter((x) => x <= 18).join(", ");
     const who = (i) => f.sel[i] === "guest" ? (f.guest[i] || `Guest ${i + 1}`) : f.sel[i] ? personName(f.sel[i]) || "Player" : `Player ${i + 1} (not picked)`;
     form = `<div class="card wfstart"><div class="field"><label for="wfCourse">Course (optional)</label><input id="wfCourse" maxlength="40" placeholder="Torrey Pines South" autocomplete="off" value="${esc(f.course)}"></div>
@@ -1878,7 +1879,7 @@ function renderRsvp() {
       ${f.opts.map((o, i) => `<div class="rvopt"><input type="date" id="rvD${i}" value="${esc(o.day)}" aria-label="Day"><input type="time" id="rvT${i}" value="${esc(o.time)}" aria-label="Time"><input type="date" id="rvE${i}" value="${esc(o.end)}" aria-label="Through"><button class="btn quiet" data-act="rvDelOpt" data-v="${i}" aria-label="Remove">✕</button></div>`).join("")}
       <button class="btn ghost" data-act="rvAddOpt">+ Another date</button>
       <span class="lab">Invite</span>
-      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="rvInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>
+      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="rvInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.full || p.name)}</label>`).join("")}</div>
       ${rvPhoneRows(f.phones)}
       <div class="field"><label for="rvNotes">Notes (optional)</label><input id="rvNotes" maxlength="240" value="${esc(f.notes)}" autocomplete="off"></div>
       <p class="err" id="rvErr" hidden></p>
@@ -2126,7 +2127,7 @@ function renderContests() {
       <div class="field"><label for="ctDeadline">Entries close</label><input id="ctDeadline" type="datetime-local" value="${esc(f.deadline)}"></div>
       <div class="field"><label for="ctVis">Crashers</label><select id="ctVis">${Object.entries(CT_VIS).map(([k, l]) => `<option value="${k}" ${f.vis === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
       <span class="lab">Invite</span>
-      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="ctInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>
+      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="ctInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.full || p.name)}</label>`).join("")}</div>
       <p class="err" id="ctErr" hidden></p>
       <div class="acts"><button class="btn primary" data-act="ctCreate">Start the contest</button><button class="btn ghost" data-act="ctCancelForm">Cancel</button></div></div>`;
   }
@@ -2258,7 +2259,7 @@ function renderSquares() {
       ${!many || f.same ? pctRow("all", f.pct.all) : chosen.map((g) => `<span class="sub"><b>${esc(nick(g.away))} at ${esc(nick(g.home))}</b></span>${pctRow(g.id, f.pct[g.id] || ["", "", "", ""])}`).join("")}
       <span id="sqTotal" class="sub ${Math.abs(total - 100) < 0.11 ? "" : "sqbad"}">Adds up to ${+total.toFixed(2)}%${Math.abs(total - 100) < 0.11 ? "" : " (needs to be 100%)"}</span>
       <span class="lab">Invite</span>
-      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="sqInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>
+      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="sqInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.full || p.name)}</label>`).join("")}</div>
       <span class="sub">Anyone else can ask to crash, and you decide.</span>
       <p class="err" id="sqErr" hidden></p>
       <div class="acts"><button class="btn primary" data-act="sqCreate">Start the pool</button><button class="btn ghost" data-act="sqCancelForm">Cancel</button></div></div>`;
@@ -2345,7 +2346,7 @@ function sqOpen(id) {
     async () => { if (S.tab === "squares" && S.sq?.view?.id === id) { await loadSquares(); render(); } });
 }
 const sqWho = (u) => (u === S.me ? "You" : personName(u) || "Someone");
-const sqFirst = (u) => (u === S.me ? "You" : String(personName(u) || "?").split(/\s+/)[0]);
+const sqFirst = (u) => (u === S.me ? "You" : personName(u) || "?");
 function renderSquaresPool() {
   const p = sqGet(S.sq.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><span class="acts">${modBtn("squares", p.id, p.originator)}<button class="btn quiet" data-act="sqBack">‹ All pools</button></span></div>`;
   if (!p) { S.sq.view = null; return renderSquares(); }
@@ -2861,7 +2862,7 @@ const ACT = {
   showCode: () => { $("#codeForm").hidden = false; $("#gCode").focus(); },
   forgotPass: () => sendResetCode(),
   setVis: (el) => setVis(el.dataset.v),
-  rename: () => { $("#gName").value = S.myName; showGate("name"); },
+  rename: () => { const me = S.people.find((p) => p.id === S.me); $("#gName").value = me?.first || S.myName; $("#gLast").value = me && me.full !== me.first ? me.full.slice(me.first.length + 1) : ""; $("#nameHead").textContent = "Change your name"; $("#nameSub").textContent = "Cards show your first name and last initial; pickers show your full name."; showGate("name"); },
   signOut: async () => {
     try { const t = store.get("hs-app-push"); if (t) { await sb.from("app_push_devices").delete().eq("token", t); store.set("hs-app-push", ""); } } catch (e) {}
     try { const r = await navigator.serviceWorker?.getRegistration(); const s = r && (await r.pushManager.getSubscription());
@@ -2955,9 +2956,9 @@ function pickPerson(uid, name) {
 function searchPeople(q) {
   const box = $("#peopleList");
   const ql = q.toLowerCase();
-  const hits = S.people.filter((p) => p.id !== S.me && (!ql || p.name.toLowerCase().includes(ql))).slice(0, 6);
+  const hits = S.people.filter((p) => p.id !== S.me && (!ql || (p.full || p.name).toLowerCase().includes(ql))).slice(0, 6);
   if (!hits.length || document.activeElement !== $("#fWith")) { box.hidden = true; return; }
-  box.innerHTML = hits.map((h) => `<button type="button" data-act="pickPerson" data-id="${esc(h.id)}" data-name="${esc(h.name)}"><span class="av">${esc(initials(h.name))}</span><span>${esc(h.name)}</span></button>`).join("");
+  box.innerHTML = hits.map((h) => `<button type="button" data-act="pickPerson" data-id="${esc(h.id)}" data-name="${esc(h.name)}"><span class="av">${esc(initials(h.full || h.name))}</span><span>${esc(h.full || h.name)}</span></button>`).join("");
   box.hidden = false;
 }
 $("#fWith").addEventListener("focus", () => searchPeople($("#fWith").value.trim()));
@@ -3133,8 +3134,9 @@ async function loadSettlements() {
   if (!r2.error && r2.data) S.settleReqs = r2.data;
 }
 async function loadPeople() {
-  const { data } = await sb.from("profiles").select("id,name").order("name");
-  if (data) S.people = data;
+  let { data, error } = await sb.from("profiles").select("id,name,last_name,display_name").order("name");
+  if (error) ({ data } = await sb.from("profiles").select("id,name").order("name")); // before update-names.sql
+  if (data) S.people = data.map((p) => ({ id: p.id, first: p.name, name: p.display_name || p.name, full: p.last_name ? `${p.name} ${p.last_name}` : p.name }));
 }
 let reloadT = null;
 function liveUpdates() {
@@ -3458,15 +3460,16 @@ $("#codeForm").addEventListener("submit", async (e) => {
 $("#nameForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#nameErr"); err.hidden = true;
-  const name = $("#gName").value.trim();
-  if (!name) { err.textContent = "Add a name your friends will recognize."; err.hidden = false; return; }
+  const name = $("#gName").value.trim(), last = $("#gLast").value.trim();
+  if (!name || !last) { err.textContent = "Add your first and last name, so friends know which Mike you are."; err.hidden = false; return; }
   const btn = $("#nameBtn"); btn.disabled = true;
-  const why = await keepItFun([name]);
+  const why = await keepItFun([name, last]);
   if (why) { btn.disabled = false; err.textContent = why; err.hidden = false; return; }
-  const { error } = await sb.from("profiles").upsert({ id: S.me, name });
+  const { error } = await sb.from("profiles").upsert({ id: S.me, name, last_name: last });
   btn.disabled = false;
   if (error) { err.textContent = friendly(error); err.hidden = false; return; }
-  S.myName = name; $("#whoName").textContent = "Signed in as " + name;
+  S.myName = `${name} ${last[0].toUpperCase()}.`; $("#whoName").textContent = "Signed in as " + name + " " + last;
+  await loadPeople().catch(() => {});
   await enter();
 });
 
@@ -3476,9 +3479,16 @@ async function enterOnce() {
   const { data: { session } } = await sb.auth.getSession();
   if (!session) return showGate(S.authMode);
   S.me = session.user.id;
-  const { data: prof } = await sb.from("profiles").select("name").eq("id", S.me).maybeSingle();
-  if (!prof?.name) { $("#gName").value = ""; return showGate("name"); }
-  S.myName = prof.name; $("#whoName").textContent = "Signed in as " + prof.name;
+  let { data: prof, error: pe } = await sb.from("profiles").select("name,last_name,display_name").eq("id", S.me).maybeSingle();
+  const hasLast = !pe; // last names switch on with update-names.sql
+  if (pe) ({ data: prof } = await sb.from("profiles").select("name").eq("id", S.me).maybeSingle());
+  if (!prof?.name || (hasLast && !prof.last_name)) {
+    $("#gName").value = prof?.name || ""; $("#gLast").value = "";
+    $("#nameHead").textContent = prof?.name ? "Add your last name" : "What's your name?";
+    $("#nameSub").textContent = prof?.name ? "There's more than one Mike out there. Cards show your first name and last initial (like Mike L.); pickers show your full name." : "First and last, so friends know it's you. Cards show your first name and last initial (like Mike L.).";
+    return showGate("name");
+  }
+  S.myName = prof.display_name || prof.name; $("#whoName").textContent = "Signed in as " + prof.name + (prof.last_name ? " " + prof.last_name : "");
   showGate(null); render();
   try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {}), loadContests().catch(() => {}), loadVenmo().catch(() => {}), loadMod().catch(() => {})]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }

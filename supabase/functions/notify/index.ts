@@ -132,7 +132,7 @@ const isId = (v: unknown) => /^[0-9a-f-]{36}$/i.test(String(v ?? ""));
 
 async function settleNote(admin: Admin, caller: string, body: { settlement_request_id?: string; settlement_id?: string; auto?: boolean }) {
   const nameOf = async (id: string) =>
-    ((await admin.from("profiles").select("name").eq("id", id).maybeSingle()).data?.name as string) || "Your rival";
+    ((await admin.from("profiles").select("name:display_name").eq("id", id).maybeSingle()).data?.name as string) || "Your rival";
   const tag = "settle-" + (body.settlement_request_id ?? body.settlement_id);
   const venmo = (h?: string | null) => (h ? ` Venmo: @${h} (venmo.com/u/${h})` : "");
 
@@ -204,7 +204,7 @@ async function pkInviteNote(admin: Admin, caller: string, body: { pickem_group?:
     .eq("invited_by", caller).eq("status", "pending").gte("created_at", since);
   const to = (inv || []).map((x: { uid: string }) => x.uid);
   if (!to.length) return reply(200, { sent: 0, reason: "nothing new" });
-  const who = ((await admin.from("profiles").select("name").eq("id", caller).maybeSingle()).data?.name as string) || "Someone";
+  const who = ((await admin.from("profiles").select("name:display_name").eq("id", caller).maybeSingle()).data?.name as string) || "Someone";
   const sent = await deliver(admin, to, { title: "Pick 'em All! invite",
     body: `${who} invited you to the Pick 'em All! group ${g.name}. Open the Everyone tab and tap Join.`, tag: "pkinvite-" + body.pickem_group });
   return reply(200, { sent });
@@ -217,7 +217,7 @@ async function crashNote(admin: Admin, caller: string, body: { pickem_group?: st
   const { data: g } = await admin.from("pickem_groups").select("name, created_by").eq("id", body.pickem_group).maybeSingle();
   if (!q || !g) return reply(404, { error: "That request no longer exists." });
   const nameOf = async (id: string) =>
-    ((await admin.from("profiles").select("name").eq("id", id).maybeSingle()).data?.name as string) || "Someone";
+    ((await admin.from("profiles").select("name:display_name").eq("id", id).maybeSingle()).data?.name as string) || "Someone";
   const tag = "crash-" + body.pickem_group + "-" + uid;
   // Someone asked to crash: tell the group's creator.
   if (caller === uid && q.status === "pending" && recent(q.created_at)) {
@@ -302,7 +302,7 @@ async function rsvpNote(admin: Admin, caller: string, body: { rsvp_event?: strin
   const inv = ((await admin.from("rsvp_invitees").select("uid").eq("event_id", id)).data || []).map((x: { uid: string }) => x.uid);
   const members = [e.organizer, ...inv] as string[];
   if (!members.includes(caller) && body.kind !== "lastcall") return reply(403, { error: "Not part of this event." });
-  const nameOf = async (u: string) => ((await admin.from("profiles").select("name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
+  const nameOf = async (u: string) => ((await admin.from("profiles").select("name:display_name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
   const tag = "rsvp-" + id;
   if (body.kind === "invite") {
     if (caller !== e.organizer || !recent(e.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
@@ -358,7 +358,7 @@ async function contestNote(admin: Admin, caller: string, body: { contest_id?: st
   const id = body.contest_id;
   const { data: c } = await admin.from("contests").select("*").eq("id", id).maybeSingle();
   if (!c) return reply(404, { error: "That contest no longer exists." });
-  const nameOf = async (u: string) => ((await admin.from("profiles").select("name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
+  const nameOf = async (u: string) => ((await admin.from("profiles").select("name:display_name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
   const entrants = [...new Set(((await admin.from("contest_entries").select("uid").eq("contest_id", id)).data || []).map((x: { uid: string }) => x.uid))] as string[];
   const tag = "contest-" + id;
   if (body.kind === "new") {
@@ -393,7 +393,7 @@ async function squaresNote(admin: Admin, caller: string, body: { squares_pool?: 
   const id = body.squares_pool;
   const { data: p } = await admin.from("squares_pools").select("*").eq("id", id).maybeSingle();
   if (!p) return reply(404, { error: "That pool no longer exists." });
-  const nameOf = async (u: string) => ((await admin.from("profiles").select("name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
+  const nameOf = async (u: string) => ((await admin.from("profiles").select("name:display_name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
   const tag = "squares-" + id;
   if (body.kind === "new") {
     if (caller !== p.originator || !recent(p.created_at)) return reply(200, { sent: 0, reason: "nothing new" });

@@ -262,7 +262,7 @@ Deno.serve(async (req) => {
     const { data: p } = await admin.from("squares_pools").select("id,title,originator").eq("id", r.pool_id).maybeSingle();
     const { data: g } = await admin.from("squares_games").select("home,away").eq("pool_id", r.pool_id).eq("game_id", r.game_id).maybeSingle();
     if (!p || !g) continue;
-    const who = r.uid ? (((await admin.from("profiles").select("name").eq("id", r.uid).maybeSingle()).data?.name as string) || "Someone") : "Nobody";
+    const who = r.uid ? (((await admin.from("profiles").select("name:display_name").eq("id", r.uid).maybeSingle()).data?.name as string) || "Someone") : "Nobody";
     const when = r.quarter === 4 ? "Final" : `End of Q${r.quarter}`;
     const fixed = r.source === "manual" ? " (score fixed)" : "";
     const to = await members(admin, p.id, p.originator);
