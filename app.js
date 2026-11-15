@@ -2145,7 +2145,7 @@ function renderSquares() {
       ${other.length ? `<div class="sqgames"><span class="sub">Picked from other weeks</span>${other.map(gameRow).join("")}</div>` : ""}
       ${wk === "err" ? `<span class="sub">Couldn't get the schedule. <button class="btn quiet" data-act="sqWeekRetry">Try again</button></span>`
         : !wk ? `<span class="sub">Getting the schedule…</span>`
-        : games.length ? `<div class="sqgames">${other.length ? `<span class="sub">${esc(sqWeekName(f.week))}</span>` : ""}${games.map(gameRow).join("")}</div>` : `<span class="sub">No upcoming games that week.</span>`}
+        : games.length ? `<div class="sqgames">${other.length ? `<span class="sub">${esc(sqWeekName(f.week))}</span>` : ""}${games.map(gameRow).join("")}</div>` : `<span class="sub">No upcoming games that week.${(S.sq.diag?.get(f.week) || []).length ? ` <span class="mono" style="font-size:11px">ESPN: ${esc(S.sq.diag.get(f.week).join(" · "))}</span>` : ""} <button class="btn quiet" data-act="sqWeekRetry">Try again</button></span>`}
       <span class="lab">Payouts (percent of the pot: ${100 * (parseInt(f.price, 10) || 0)} pts)</span>
       ${many ? `<label class="rvpick"><input type="checkbox" id="sqSame" ${f.same ? "checked" : ""}> Same for all games <span class="sub">(the pot splits evenly across games)</span></label>` : ""}
       ${!many || f.same ? pctRow("all", f.pct.all) : chosen.map((g) => `<span class="sub"><b>${esc(nick(g.away))} at ${esc(nick(g.home))}</b></span>${pctRow(g.id, f.pct[g.id] || ["", "", "", ""])}`).join("")}
@@ -2200,6 +2200,7 @@ async function sqLoadWeek(w) {
     const { data, error } = await sb.functions.invoke("squares", { body: { schedule: w } });
     if (error || !data?.games) return done("err");
     for (const g of data.games) S.sq.info.set(g.id, g);
+    (S.sq.diag = S.sq.diag || new Map()).set(w, data.diag || []);
     done(data.games.filter((g) => nflWeek(g.starts_at) === w));
   } catch (e) { done("err"); }
 }

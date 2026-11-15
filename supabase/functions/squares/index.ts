@@ -26,7 +26,22 @@ const APNS_TEAM_ID = Deno.env.get("APNS_TEAM_ID") ?? "";
 const APNS_PRIVATE_KEY = Deno.env.get("APNS_PRIVATE_KEY") ?? "";
 const APNS_TOPIC = Deno.env.get("APNS_TOPIC") ?? "com.jadeeb.handshake";
 const APNS_HOST = "https://api.push.apple.com";
-const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+const ESPN_HOSTS = ["https://site.api.espn.com", "https://site.web.api.espn.com"];
+const ESPN_PATH = "/apis/site/v2/sports/football/nfl/scoreboard";
+const ESPN_HEADERS = { "User-Agent": "Mozilla/5.0 (compatible; Handshake/1.0)", Accept: "application/json" };
+/** ESPN scoreboard events for a query; tries the second host if the first fails. Notes what happened in diag. */
+async function espn(query: string, diag?: string[]): Promise<Ev[]> {
+  for (const host of ESPN_HOSTS) {
+    try {
+      const r = await fetch(`${host}${ESPN_PATH}?${query}`, { headers: ESPN_HEADERS });
+      if (!r.ok) { diag?.push(`${query} ${new URL(host).hostname} ${r.status}`); console.error("squares: ESPN", host, query, r.status); continue; }
+      const evs = ((await r.json()).events ?? []) as Ev[];
+      diag?.push(`${query} ${evs.length}`);
+      return evs;
+    } catch (e) { diag?.push(`${query} ${new URL(host).hostname} ${String(e).slice(0, 80)}`); console.error("squares: ESPN failed", host, query, e); }
+  }
+  return [];
+}
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -163,12 +178,21 @@ export function quartersDone(ev: Ev, home: string, away: string, id?: string): {
 /* ---------- the week's schedule, for the Start a pool form ---------- */
 async function schedule(admin: Admin, week: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) return reply(400, { error: "Pick a week." });
-  const t0 = Date.parse(week + "T12:00:00Z");
-  const days = Array.from({ length: 7 }, (_, i) => new Date(t0 + i * 86400e3).toISOString().slice(0, 10).replaceAll("-", ""));
-  const lists = await Promise.all(days.map(async (d) => {
-    try { const r = await fetch(`${ESPN}?dates=${d}`); return r.ok ? ((await r.json()).events ?? []) as Ev[] : []; }
-    catch (_) { return [] as Ev[]; }
-  }));
+  const t0 = Date.parse(week + "T12:00:00Z"), diag: string[] = [];
+  const ymd = (t: number) => new Date(t).toISOString().slice(0, 10).replaceAll("-", "");
+  const inRange = (ev: Ev) => !!ev.date && Date.parse(ev.date) >= t0 - 12 * 3600e3 && Date.parse(ev.date) < t0 + 7 * 86400e3;
+  // 1) the whole Tuesday-Monday range in one call; 2) day by day; 3) by NFL week number
+  let evs = (await espn(`dates=${ymd(t0)}-${ymd(t0 + 6 * 86400e3)}&limit=100`, diag)).filter(inRange);
+  if (!evs.length) evs = (await Promise.all(Array.from({ length: 7 }, (_, i) => espn(`dates=${ymd(t0 + i * 86400e3)}`, diag)))).flat().filter(inRange);
+  if (!evs.length) {
+    // regular season week 1 starts the Tuesday after Labor Day (first Monday in September)
+    const y = new Date(t0).getUTCMonth() < 6 ? new Date(t0).getUTCFullYear() - 1 : new Date(t0).getUTCFullYear();
+    const sep1 = new Date(Date.UTC(y, 8, 1)).getUTCDay(), labor = Date.UTC(y, 8, 1 + ((8 - sep1) % 7)), w1 = labor + 86400e3;
+    const n = Math.round((t0 - 12 * 3600e3 - w1) / (7 * 86400e3)) + 1;
+    if (n >= 1 && n <= 18) evs = (await espn(`seasontype=2&week=${n}&dates=${y}`, diag)).filter(inRange);
+    else if (n > 18) evs = (await espn(`seasontype=3&week=${n - 18}&dates=${y}`, diag)).filter(inRange);
+  }
+  const lists = [evs];
   const games = new Map<string, { id: string; starts_at: string; home: string; away: string }>();
   for (const ev of lists.flat()) {
     const c = ev.competitions?.[0], h = c?.competitors.find((x) => x.homeAway === "home"), a = c?.competitors.find((x) => x.homeAway === "away");
@@ -180,7 +204,8 @@ async function schedule(admin: Admin, week: string) {
     const { error } = await admin.from("nfl_schedule").upsert(rows.map((r) => ({ ...r, updated_at: new Date().toISOString() })));
     if (error) return reply(500, { error: error.message });
   }
-  return reply(200, { games: rows }, true);
+  if (!rows.length) console.log("squares: schedule empty for", week, diag.join(" | "));
+  return reply(200, { games: rows, diag }, true);
 }
 
 /* ---------- the run ---------- */
@@ -207,11 +232,7 @@ Deno.serve(async (req) => {
   for (const g of pending ?? []) {
     const day = etDay(g.starts_at);
     if (!byDay.has(day)) {
-      try {
-        const res = await fetch(`${ESPN}?dates=${day}`);
-        byDay.set(day, res.ok ? ((await res.json()).events ?? []) : []);
-        if (!res.ok) console.error("squares: ESPN", res.status);
-      } catch (e) { console.error("squares: ESPN failed", e); byDay.set(day, []); }
+      byDay.set(day, await espn(`dates=${day}`));
     }
     for (const ev of byDay.get(day)!) {
       const qs = quartersDone(ev, g.home, g.away, g.game_id);
