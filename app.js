@@ -1318,14 +1318,16 @@ function pkGameCard(g, v, tbId, mine) {
   const hs = g.home_spread == null ? null : +g.home_spread, my = v.picks.find((p) => p.game_id === g.id && p.uid === S.me)?.side;
   const locked = pkLocked(g, v.games), cov = coverSide(g);
   const mark = (s) => (my !== s || !cov ? "" : cov === "push" ? " · push" : cov === s ? " ✓" : " ✗");
-  const btn = (s, label) => `<button class="btn ghost vpick ${my === s ? "on" : ""}" aria-pressed="${my === s}" data-act="pkPick" data-id="${esc(g.id)}" data-v="${s}" ${locked || !mine ? "disabled" : ""}>${label}${mark(s)}</button>`;
+  const res = (s) => (!cov ? "" : cov === "push" ? "res-push" : cov === s ? "res-win" : "res-lose"); // once the result is known
+  const btn = (s, label) => `<button class="btn ghost vpick ${my === s ? "on " + res(s) : ""}" aria-pressed="${my === s}" data-act="pkPick" data-id="${esc(g.id)}" data-v="${s}" ${locked || !mine ? "disabled" : ""}>${label}${mark(s)}</button>`;
   const lineRow = hs == null ? `<span class="sub">No spread posted, so this game isn't in the pool.</span>`
     : `<div class="vrow">${btn("away", esc(nick(g.away)) + " <b class=\"mono\">" + lineTxt(-hs) + "</b>")}${btn("home", esc(nick(g.home)) + " <b class=\"mono\">" + lineTxt(hs) + "</b>")}</div>`;
   let who = "";
   if (locked && hs != null) {
     const by = (s) => v.picks.filter((p) => p.game_id === g.id && p.side === s).map((p) => pkName(p.uid));
     const a = by("away"), h = by("home");
-    who = a.length || h.length ? `<span class="sub">${esc(nick(g.away))}: ${a.length ? esc(a.join(", ")) : "nobody"} · ${esc(nick(g.home))}: ${h.length ? esc(h.join(", ")) : "nobody"}</span>` : `<span class="sub">Nobody picked this game.</span>`;
+    const grp = (s, team, names) => `<span class="pkwho ${names.length ? res(s) : ""}">${esc(team)}: ${names.length ? esc(names.join(", ")) : "nobody"}</span>`;
+    who = a.length || h.length ? `<span class="sub">${grp("away", nick(g.away), a)} · ${grp("home", nick(g.home), h)}</span>` : `<span class="sub">Nobody picked this game.</span>`;
   }
   const score = g.home_score != null ? `<span class="sub mono">${g.completed ? "Final" : "Latest"}: ${esc(nick(g.away))} ${g.away_score}, ${esc(nick(g.home))} ${g.home_score}${cov ? " · " + (cov === "push" ? "push on the spread" : esc(nick(cov === "home" ? g.home : g.away)) + " covered") : ""}</span>` : "";
   let tb = "";

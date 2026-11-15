@@ -123,6 +123,11 @@ button{cursor:pointer}
 .totop:hover{opacity:1}.totop[hidden]{display:none}
 @media (prefers-reduced-motion:reduce){.totop{transition:none}}
 .pklead{font-weight:800;color:var(--good)}
+.vpick.on.res-win{background:color-mix(in srgb,var(--good) 26%,transparent);border-color:var(--good);color:var(--ink)}
+.vpick.on.res-lose{background:color-mix(in srgb,#d64545 24%,transparent);border-color:#d64545;color:var(--ink)}
+.vpick.on.res-push{background:color-mix(in srgb,#e3b505 26%,transparent);border-color:#e3b505;color:var(--ink)}
+.vpick.on[class*="res-"]:disabled{opacity:1}
+.pkwho.res-win{color:var(--good);font-weight:700}.pkwho.res-lose{color:#d64545;font-weight:700}.pkwho.res-push{color:#c99a00;font-weight:700}
 .sqbad{color:var(--stamp);font-weight:600}
 .sqtabs{display:flex;flex-wrap:wrap;gap:6px}
 .sqboard{display:flex;flex-direction:column;gap:2px;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:8px}
