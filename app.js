@@ -1156,7 +1156,7 @@ async function loadPickem() {
     sb.from("pickem_crash_requests").select("*"),
     sb.from("pickem_submissions").select("*").eq("week", nflWeek(Date.now())),
     sb.from("pickem_invites").select("*"),
-    sb.from("vegas_lines").select("id,starts_at,home_spread").gte("starts_at", new Date(Date.parse(nflWeek(Date.now()) + "T00:00:00Z") - DAY).toISOString()).lt("starts_at", new Date(Date.parse(nflWeek(Date.now()) + "T00:00:00Z") + 8 * DAY).toISOString()),
+    sb.from("vegas_lines").select("id,starts_at,home_spread,home,away,home_score,away_score,completed").gte("starts_at", new Date(Date.parse(nflWeek(Date.now()) + "T00:00:00Z") - DAY).toISOString()).lt("starts_at", new Date(Date.parse(nflWeek(Date.now()) + "T00:00:00Z") + 8 * DAY).toISOString()),
   ]);
   if (g.error) { S.pk = { ...S.pk, off: true }; return; }
   // before update-pickem-2.sql runs, the ledger is missing: fall back to weekly results
@@ -1166,6 +1166,13 @@ async function loadPickem() {
     requests: req.error ? [] : req.data || [], v2: !led.error,
     subs: sub.error ? [] : sub.data || [], v3: !sub.error, invites: inv.error ? [] : inv.data || [], v4: !inv.error,
     weekGames: (wk.data || []).filter((x) => nflWeek(x.starts_at) === nflWeek(Date.now())) };
+  // this week's picks (others' show once each game locks) for the live "This week" column
+  const wkIds = S.pk.weekGames.map((x) => x.id), cw = nflWeek(Date.now());
+  const [wp, wb] = await Promise.all([
+    wkIds.length ? sb.from("pickem_picks").select("group_id,uid,game_id,side").in("game_id", wkIds) : { data: [] },
+    S.pk.v2 ? sb.from("pickem_bonus").select("group_id,uid,game_id").eq("week", cw) : { data: [] },
+  ]);
+  S.pk.wkPicks = wp.data || []; S.pk.wkBonus = wb.data || [];
 }
 function pkTotals(gid) {
   const rows = new Map(pkMembers(gid).map((m) => [m.uid, { uid: m.uid, name: pkName(m.uid), points: 0, won: 0, weeks: 0 }]));
@@ -1194,9 +1201,26 @@ function pkResults(g) {
 function pkStandings(g, rows = pkTotals(g.id)) {
   const subs = new Set(S.pk.subs.filter((x) => x.group_id === g.id).map((x) => x.uid));
   const inCol = S.pk.v3;
-  return `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Wins</th>${inCol ? `<th class="num pkinh">Picks in</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
-    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.uid === S.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
+  const wk = pkWeekSoFar(g), wkCol = wk.final > 0;
+  return `<div class="table"><table><thead><tr><th>Player</th><th class="num">Points</th><th class="num">Wins</th>${wkCol ? `<th class="num" title="Games right this week so far">Wk</th>` : ""}${inCol ? `<th class="num pkinh" title="Picks in this week">In</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
+    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${i + 1}</span><span>${esc(r.name)}${r.uid === S.me ? ` <span class="you">you</span>` : ""}</span></td><td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${wkCol ? `<td class="num${wk.lead.has(r.uid) ? " pklead" : ""}">${wk.right.get(r.uid) ?? 0}${wk.star.has(r.uid) ? "★" : ""}</td>` : ""}${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
+    + (wkCol ? `<span class="sub">Wk = games right this week so far (${wk.final} of ${wk.games} games final)${wk.lead.size ? ` · leading: ${esc(listNames([...wk.lead].map((u) => pkName(u))))} (${wk.top} right)` : ""}. Updates within minutes of each game ending; points move when the week is scored.</span>` : "")
     + (inCol ? `<span class="sub">Picks in this week (${esc(weekLabel(nflWeek(Date.now())))}): ${rows.filter((r) => subs.has(r.uid)).length} of ${rows.length}</span>` : "");
+}
+// This week's games right so far (spread covers on final games; ★ = bonus game right, counts double).
+function pkWeekSoFar(g) {
+  const games = S.pk.weekGames || [], fin = games.filter((x) => x.completed), right = new Map(), star = new Set();
+  for (const p of (S.pk.wkPicks || []).filter((x) => x.group_id === g.id)) {
+    const gm = fin.find((x) => x.id === p.game_id), c = gm && coverSide(gm);
+    if (c && c === p.side) {
+      right.set(p.uid, (right.get(p.uid) || 0) + 1);
+      if ((S.pk.wkBonus || []).some((b) => b.group_id === g.id && b.uid === p.uid && b.game_id === p.game_id)) star.add(p.uid);
+    }
+  }
+  const score = (u) => (right.get(u) || 0) + (star.has(u) ? 1 : 0);
+  const top = Math.max(0, ...[...right.keys()].map(score));
+  const lead = new Set(top > 0 ? [...right.keys()].filter((u) => score(u) === top) : []);
+  return { games: games.filter((x) => x.home_spread != null).length, final: fin.length, right, star, lead, top };
 }
 function pkCard(g) {
   const mine = pkIsMember(g.id), rows = pkTotals(g.id);
@@ -3457,6 +3481,14 @@ $("#codeForm").addEventListener("submit", async (e) => {
   btn.disabled = false;
   await enter();
 });
+/* ---------- Pick 'em: refresh every 3 minutes while this week's games are being played ---------- */
+setInterval(() => {
+  if (document.hidden || !S.pk || S.pk.off || !S.me) return;
+  const live = (S.pk.weekGames || []).some((x) => !x.completed && Date.parse(x.starts_at) <= Date.now());
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || "");
+  if (live && !typing && !S.mod) loadPickem().then(() => { if (S.tab === "feed" || S.tab === "board") render(); }).catch(() => {});
+}, 3 * 60 * 1000);
+
 /* ---------- Take it to the Top: a floating button once you've scrolled down ---------- */
 {
   const btn = $("#toTop");

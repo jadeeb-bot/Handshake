@@ -9,6 +9,9 @@
 // The app also calls it with {"schedule": "YYYY-MM-DD"} (a Tuesday) to list that NFL week's games
 // from ESPN for the Start a pool form; those are saved in nfl_schedule.
 // It returns right away when no pool needs anything, so most runs make no outside calls.
+// It also keeps NFL scores current for the Vegas tab and Pick 'em All!: while any game that has
+// kicked off isn't final, it reads ESPN and saves the scores (save_vegas_scores), and when a game
+// goes final it runs grade_pickem, so standings move within minutes of each game ending.
 //
 // Secrets: the same push secrets as notify (VAPID_PRIVATE_KEY, APNS_KEY_ID, APNS_TEAM_ID,
 // APNS_PRIVATE_KEY). Supabase shares secrets across functions, so nothing new to add.
@@ -208,6 +211,33 @@ async function schedule(admin: Admin, week: string) {
   return reply(200, { games: rows, diag }, true);
 }
 
+/* ---------- NFL scores for the Vegas tab and Pick 'em All! (ESPN, free) ---------- */
+async function nflScores(admin: Admin) {
+  const since = new Date(Date.now() - 3 * 86400e3).toISOString();
+  const { data: live } = await admin.from("vegas_lines").select("id,home,away,starts_at").eq("completed", false)
+    .lte("starts_at", new Date().toISOString()).gte("starts_at", since);
+  if (!live?.length) return { live: 0, saved: 0, final: 0 };
+  const byDay = new Map<string, Ev[]>();
+  const rows: { id: string; home_score: number; away_score: number; completed: boolean }[] = [];
+  for (const g of live) {
+    const day = etDay(g.starts_at);
+    if (!byDay.has(day)) byDay.set(day, await espn(`dates=${day}`));
+    for (const ev of byDay.get(day)!) {
+      const c = ev.competitions?.[0], h = c?.competitors.find((x) => x.homeAway === "home"), a = c?.competitors.find((x) => x.homeAway === "away");
+      if (!c || !h || !a || !sameTeam(g.home, h.team) || !sameTeam(g.away, a.team)) continue;
+      if (c.status.period >= 1 || c.status.type.completed) rows.push({ id: g.id, home_score: Number(h.score) || 0, away_score: Number(a.score) || 0, completed: !!c.status.type.completed });
+      break;
+    }
+  }
+  if (!rows.length) return { live: live.length, saved: 0, final: 0 };
+  const { data: saved, error } = await admin.rpc("save_vegas_scores", { p_rows: rows });
+  if (error) { console.error("squares: save scores", error.message); return { live: live.length, saved: 0, final: 0, error: error.message }; }
+  const final = rows.filter((r) => r.completed).length;
+  let graded = null;
+  if (final) { const g = await admin.rpc("grade_pickem"); graded = g.error ? g.error.message : g.data; }
+  return { live: live.length, saved, final, graded };
+}
+
 /* ---------- the run ---------- */
 async function members(admin: Admin, pool: string, originator: string) {
   const inv = ((await admin.from("squares_invitees").select("uid").eq("pool_id", pool)).data ?? []).map((x: { uid: string }) => x.uid);
@@ -223,6 +253,7 @@ Deno.serve(async (req) => {
   try { body = (await req.json()) ?? {}; } catch (_) { /* cron sends {} */ }
   if (body.schedule) return await schedule(admin, String(body.schedule));
   const drawn = (await admin.rpc("squares_tick")).data ?? 0;
+  const scores = await nflScores(admin).catch((e) => ({ error: String(e) }));
 
   // 1. scores for games in progress
   const { data: pending, error: pErr } = await admin.rpc("squares_pending_games");
@@ -272,5 +303,5 @@ Deno.serve(async (req) => {
       tag: `squares-${p.id}-${r.game_id}-${r.quarter}`,
     });
   }
-  return reply(200, { drawn, games: pending?.length ?? 0, recorded, sent });
+  return reply(200, { drawn, games: pending?.length ?? 0, recorded, sent, scores });
 });
