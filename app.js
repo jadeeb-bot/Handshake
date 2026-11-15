@@ -2111,10 +2111,8 @@ async function loadSquares() {
   if (error) { S.sq = { ...(S.sq || {}), off: true, list: [] }; return; }
   const ids = (data || []).map((p) => p.id), q = (t, col = "pool_id") => (ids.length ? sb.from(t).select("*").in(col, ids) : { data: [] });
   const [g, cl, inv, cr, pd, rs] = await Promise.all([q("squares_games"), q("squares_claims"), q("squares_invitees"), q("squares_crash"), q("squares_paid"), q("squares_results")]);
-  const gids = [...new Set((g.data || []).map((x) => x.game_id))];
-  const ln = gids.length ? await sb.from("vegas_lines").select("*").in("id", gids) : { data: [] };
   S.sq = { ...(S.sq || {}), off: false, list: data || [], games: (g.data || []).sort((a, b) => a.ord - b.ord), claims: cl.data || [], invitees: inv.data || [],
-    crash: cr.data || [], paid: pd.data || [], results: rs.data || [], lines: new Map((ln.data || []).map((x) => [x.id, x])) };
+    crash: cr.data || [], paid: pd.data || [], results: rs.data || [], lines: new Map((g.data || []).map((x) => [x.game_id, x])) };
 }
 const sqGet = (id) => (S.sq?.list || []).find((p) => p.id === id);
 const sqOf = (key, id) => (S.sq?.[key] || []).filter((x) => x.pool_id === id);
@@ -2131,16 +2129,23 @@ function renderSquares() {
   if (S.sq.view) return renderSquaresPool();
   let form = "";
   if (S.sq.form) {
-    const f = S.sq.form, games = (S.lines || []).filter((g) => Date.parse(g.starts_at) > Date.now());
-    if (S.lines === null) loadLines();
-    const chosen = games.filter((g) => f.games.includes(g.id)), many = chosen.length > 1;
+    const f = S.sq.form, info = S.sq.info || new Map(), wk = S.sq.sched?.get(f.week);
+    if (!wk) sqLoadWeek(f.week);
+    const games = (wk || []).filter((g) => Date.parse(g.starts_at) > Date.now());
+    const chosen = f.games.map((id) => info.get(id)).filter(Boolean), many = chosen.length > 1;
+    const other = chosen.filter((g) => !games.some((x) => x.id === g.id));
+    const day = (g) => new Date(g.starts_at).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) + " " + kickoff(g);
+    const gameRow = (g) => `<label><input type="checkbox" class="sqGame" value="${esc(g.id)}" ${f.games.includes(g.id) ? "checked" : ""}> ${esc(nick(g.away))} at ${esc(nick(g.home))} <span class="sub">${esc(day(g))}</span></label>`;
     const pctRow = (key, vals) => `<div class="sqpct">${SQ_Q.map((q, i) => `<label>${q}<input class="sqPct" data-k="${key}" data-i="${i}" type="number" inputmode="decimal" min="0" max="100" value="${esc(vals[i])}"></label>`).join("")}</div>`;
-    const total = sqFormPct(f).reduce((t, g) => t + g.pct.reduce((a, b) => a + b, 0), 0);
+    const total = sqFormTotal(f);
     form = `<div class="card wfstart">
       <div class="field"><label for="sqTitle">Name the pool</label><input id="sqTitle" maxlength="60" placeholder="Sunday squares" value="${esc(f.title)}" autocomplete="off"></div>
       <div class="field"><label for="sqPrice">Points per square</label><input id="sqPrice" type="number" inputmode="numeric" min="1" max="1000" value="${esc(f.price)}"></div>
-      <span class="lab">Games</span>
-      ${games.length ? `<div class="sqgames">${games.map((g) => `<label><input type="checkbox" class="sqGame" value="${esc(g.id)}" ${f.games.includes(g.id) ? "checked" : ""}> ${esc(nick(g.away))} at ${esc(nick(g.home))} <span class="sub">${esc(new Date(g.starts_at).toLocaleDateString("en-US", { weekday: "short" }))} ${esc(kickoff(g))}</span></label>`).join("")}</div>` : `<span class="sub">${S.lines === null ? "Loading games…" : "No upcoming games on the Vegas list yet."}</span>`}
+      <div class="field"><label for="sqWeek">Games: pick the week</label><select id="sqWeek">${sqWeeks().map((w) => `<option value="${w}" ${w === f.week ? "selected" : ""}>${esc(sqWeekName(w))}</option>`).join("")}</select></div>
+      ${other.length ? `<div class="sqgames"><span class="sub">Picked from other weeks</span>${other.map(gameRow).join("")}</div>` : ""}
+      ${wk === "err" ? `<span class="sub">Couldn't get the schedule. <button class="btn quiet" data-act="sqWeekRetry">Try again</button></span>`
+        : !wk ? `<span class="sub">Getting the schedule…</span>`
+        : games.length ? `<div class="sqgames">${other.length ? `<span class="sub">${esc(sqWeekName(f.week))}</span>` : ""}${games.map(gameRow).join("")}</div>` : `<span class="sub">No upcoming games that week.</span>`}
       <span class="lab">Payouts (percent of the pot: ${100 * (parseInt(f.price, 10) || 0)} pts)</span>
       ${many ? `<label class="rvpick"><input type="checkbox" id="sqSame" ${f.same ? "checked" : ""}> Same for all games <span class="sub">(the pot splits evenly across games)</span></label>` : ""}
       ${!many || f.same ? pctRow("all", f.pct.all) : chosen.map((g) => `<span class="sub"><b>${esc(nick(g.away))} at ${esc(nick(g.home))}</b></span>${pctRow(g.id, f.pct[g.id] || ["", "", "", ""])}`).join("")}
@@ -2168,11 +2173,35 @@ function sqFormPct(f) {
   if (ids.length === 1 || f.same) return ids.map((id) => ({ game_id: id, pct: f.pct.all.map((x) => Math.round((n(x) / ids.length) * 100) / 100) }));
   return ids.map((id) => ({ game_id: id, pct: (f.pct[id] || []).map(n).concat([0, 0, 0, 0]).slice(0, 4) }));
 }
+function sqFormTotal(f) {
+  const n = (v) => parseFloat(v) || 0, sum = (a) => (a || []).reduce((t, x) => t + n(x), 0);
+  return f.games.length <= 1 || f.same ? sum(f.pct.all) : f.games.reduce((t, id) => t + sum(f.pct[id]), 0);
+}
 function sqFormCapture() {
   const f = S.sq?.form; if (!f || !$("#sqTitle")) return;
-  f.title = $("#sqTitle").value; f.price = $("#sqPrice").value; f.games = checked(".sqGame"); f.inv = checked(".sqInv");
+  f.title = $("#sqTitle").value; f.price = $("#sqPrice").value; f.games = checked(".sqGame"); f.inv = checked(".sqInv"); if ($("#sqWeek")) f.week = $("#sqWeek").value;
   if ($("#sqSame")) f.same = $("#sqSame").checked;
   document.querySelectorAll(".sqPct").forEach((x) => { const k = x.dataset.k; (f.pct[k] = f.pct[k] || ["", "", "", ""])[+x.dataset.i] = x.value; });
+}
+// Start a pool: weeks to choose from (this one through the Super Bowl) and each week's games from ESPN.
+function sqWeeks() { const w0 = nflWeek(Date.now()); return Array.from({ length: 16 }, (_, i) => weekShift(w0, i)); }
+function sqWeekName(w) {
+  const t = Date.parse(w + "T12:00:00Z"), inWeek = (m, d) => { for (let i = 0; i < 7; i++) { const x = new Date(t + i * DAY); if (x.getUTCMonth() === m && x.getUTCDate() === d) return true; } return false; };
+  const y = new Date(t).getUTCFullYear(), nov1 = new Date(Date.UTC(y, 10, 1)).getUTCDay(), thanks = 1 + ((4 - nov1 + 7) % 7) + 21;
+  const tag = inWeek(10, thanks) ? " (Thanksgiving)" : inWeek(11, 25) ? " (Christmas)" : inWeek(0, 1) ? " (New Year's)" : "";
+  return (w === nflWeek(Date.now()) ? "This week · " : "") + weekLabel(w) + tag;
+}
+async function sqLoadWeek(w) {
+  S.sq.sched = S.sq.sched || new Map(); S.sq.info = S.sq.info || new Map();
+  if (S.sq.sched.has(w)) return;
+  S.sq.sched.set(w, null);
+  const done = (v) => { S.sq.sched.set(w, v); if (S.sq.form) { sqFormCapture(); render(); } };
+  try {
+    const { data, error } = await sb.functions.invoke("squares", { body: { schedule: w } });
+    if (error || !data?.games) return done("err");
+    for (const g of data.games) S.sq.info.set(g.id, g);
+    done(data.games.filter((g) => nflWeek(g.starts_at) === w));
+  } catch (e) { done("err"); }
 }
 async function sqCreate() {
   sqFormCapture();
@@ -2335,7 +2364,7 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { if (el.dataset.v === "board") loadContests().then(render).catch(() => {}); if (el.dataset.v === "quanto" || el.dataset.v === "rivals") loadVenmo().then(render).catch(() => {}); if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v !== "squares") liveUnsub("squares"); if (el.dataset.v === "squares" && S.sq) { S.sq.view = null; loadSquares().then(render).catch(() => {}); } if (el.dataset.v === "squares" && S.lines == null) loadLines(); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  tab: (el) => { if (el.dataset.v === "board") loadContests().then(render).catch(() => {}); if (el.dataset.v === "quanto" || el.dataset.v === "rivals") loadVenmo().then(render).catch(() => {}); if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v !== "squares") liveUnsub("squares"); if (el.dataset.v === "squares" && S.sq) { S.sq.view = null; loadSquares().then(render).catch(() => {}); } if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
   vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
   pkGo: () => { S.tab = "feed"; S.pkView = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
   pkName: () => { S.pkNaming = true; render(); setTimeout(() => $("#pkName")?.focus(), 30); },
@@ -2376,7 +2405,8 @@ const ACT = {
   rvCancelEvent: () => { if (S.rsvp.cancelArm !== S.rsvp.view.id) { S.rsvp.cancelArm = S.rsvp.view.id; return toast("Tap Cancel event again to call it off."); } S.rsvp.cancelArm = null; rvAct("rsvp_cancel", { p_event: S.rsvp.view.id }, "Event canceled."); },
   ctNew: () => { const d = new Date(Date.now() + 7 * DAY); d.setMinutes(0, 0, 0); S.ct.form = { title: "", choices: "", writeins: false, points: "5", max: "1", deadline: exactInput(d.getTime()), vis: "invited", inv: [] }; render(); },
   ctCancelForm: () => { S.ct.form = null; render(); },
-  sqNew: () => { S.sq.form = { title: "", price: "5", games: [], same: true, pct: { all: ["20", "20", "20", "40"] }, inv: [] }; if (!S.lines) loadLines(); render(); },
+  sqNew: () => { S.sq.form = { title: "", price: "5", games: [], same: true, pct: { all: ["20", "20", "20", "40"] }, inv: [], week: nflWeek(Date.now()) }; render(); },
+  sqWeekRetry: () => { S.sq.sched?.delete(S.sq.form.week); render(); },
   sqCancelForm: () => { S.sq.form = null; render(); },
   sqCreate: () => sqCreate(),
   sqOpen: (el) => sqOpen(el.dataset.id),
@@ -2632,7 +2662,7 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "cText") S.counterDraft.text = e.target.value;
   if (e.target.id === "proofLink") S.proofDraft.link = e.target.value;
   if (e.target.id === "objText") S.objDraft = e.target.value;
-  if (e.target.classList?.contains("sqPct")) { sqFormCapture(); const t = sqFormPct(S.sq.form).reduce((a, g) => a + g.pct.reduce((x, y) => x + y, 0), 0), el = $("#sqTotal"), ok = Math.abs(t - 100) < 0.11;
+  if (e.target.classList?.contains("sqPct")) { sqFormCapture(); const t = sqFormTotal(S.sq.form), el = $("#sqTotal"), ok = Math.abs(t - 100) < 0.11;
     if (el) { el.textContent = `Adds up to ${+t.toFixed(2)}%` + (ok ? "" : " (needs to be 100%)"); el.classList.toggle("sqbad", !ok); } }
   if (e.target.id === "nPhone") {
     const n = e.target.value.replace(/[^\d+]/g, "");
@@ -2646,7 +2676,7 @@ document.addEventListener("change", (e) => {
   if (/^wfSel\d$/.test(e.target.id)) { const i = e.target.id.slice(5); wfFormCapture(); render(); const g = $("#wfGuest" + i); if (g && !g.hidden && !g.value) g.focus(); }
   if (/^wfGuest\d$/.test(e.target.id)) { wfFormCapture(); render(); }
   if (e.target.name === "rvWhere") { rvFormCapture(); render(); }
-  if (e.target.classList?.contains("sqGame") || e.target.id === "sqSame" || e.target.id === "sqPrice") { sqFormCapture(); render(); }
+  if (e.target.classList?.contains("sqGame") || e.target.id === "sqSame" || e.target.id === "sqPrice" || e.target.id === "sqWeek") { sqFormCapture(); render(); }
   if (e.target.name === "rvLockOpt") { rvLockCapture(); const L = S.rsvp.lock, d = rvLockDefaults(L.opt); L.people = [...new Set([...d.people, ...L.people])]; L.on = [...new Set([...d.on, ...L.on.filter((u) => !d.people.includes(u))])]; render(); }
 });
 document.addEventListener("click", (e) => {

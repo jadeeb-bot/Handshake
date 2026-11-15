@@ -6,6 +6,8 @@
 //   2. for games in progress, reads ESPN's public NFL scoreboard and records the score at the
 //      end of each quarter (Q4 = final, overtime included) with the winning square;
 //   3. notifies everyone in the pool of each new (or fixed) quarter result, once.
+// The app also calls it with {"schedule": "YYYY-MM-DD"} (a Tuesday) to list that NFL week's games
+// from ESPN for the Start a pool form; those are saved in nfl_schedule.
 // It returns right away when no pool needs anything, so most runs make no outside calls.
 //
 // Secrets: the same push secrets as notify (VAPID_PRIVATE_KEY, APNS_KEY_ID, APNS_TEAM_ID,
@@ -26,9 +28,14 @@ const APNS_TOPIC = Deno.env.get("APNS_TOPIC") ?? "com.jadeeb.handshake";
 const APNS_HOST = "https://api.push.apple.com";
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
 
-const reply = (status: number, body: unknown) => {
-  console.log("squares:", status, JSON.stringify(body));
-  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const cors = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const reply = (status: number, body: unknown, quiet = false) => {
+  if (!quiet) console.log("squares:", status, JSON.stringify(body));
+  return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 };
 type Note = { title: string; body: string; tag: string };
 // deno-lint-ignore no-explicit-any
@@ -121,7 +128,7 @@ const deliver = async (admin: Admin, userIds: string[], note: Note) =>
 
 /* ---------- ESPN scores ---------- */
 type Comp = { homeAway: string; score?: string; team: { displayName: string; shortDisplayName?: string; name?: string; abbreviation?: string }; linescores?: { value: number }[] };
-type Ev = { competitions: { competitors: Comp[]; status: { period: number; type: { name: string; completed: boolean } } }[] };
+type Ev = { id?: string; date?: string; competitions: { competitors: Comp[]; status: { period: number; type: { name: string; completed: boolean } } }[] };
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
 const nick = (s: string) => norm(s).split(" ").pop() ?? "";
 const sameTeam = (ours: string, t: Comp["team"]) =>
@@ -130,11 +137,13 @@ const etDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZ
 const short = (team: string) => team.split(" ").pop() ?? team;
 
 /** Quarters that are over, with the cumulative score at the end of each (Q4 = final, OT included). */
-export function quartersDone(ev: Ev, home: string, away: string): { q: number; home: number; away: number }[] | null {
+export function quartersDone(ev: Ev, home: string, away: string, id?: string): { q: number; home: number; away: number }[] | null {
   const c = ev.competitions?.[0];
   if (!c) return null;
   const h = c.competitors.find((x) => x.homeAway === "home"), a = c.competitors.find((x) => x.homeAway === "away");
-  if (!h || !a || !sameTeam(home, h.team) || !sameTeam(away, a.team)) return null;
+  if (!h || !a) return null;
+  // new pools use ESPN's game id; older ones match on team names
+  if (!(id && ev.id === id) && !(sameTeam(home, h.team) && sameTeam(away, a.team))) return null;
   const st = c.status, name = st.type.name;
   const over = st.type.completed;
   // a quarter is done once play has moved past it (or it's the break right after it)
@@ -151,6 +160,29 @@ export function quartersDone(ev: Ev, home: string, away: string): { q: number; h
   return out;
 }
 
+/* ---------- the week's schedule, for the Start a pool form ---------- */
+async function schedule(admin: Admin, week: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(week)) return reply(400, { error: "Pick a week." });
+  const t0 = Date.parse(week + "T12:00:00Z");
+  const days = Array.from({ length: 7 }, (_, i) => new Date(t0 + i * 86400e3).toISOString().slice(0, 10).replaceAll("-", ""));
+  const lists = await Promise.all(days.map(async (d) => {
+    try { const r = await fetch(`${ESPN}?dates=${d}`); return r.ok ? ((await r.json()).events ?? []) as Ev[] : []; }
+    catch (_) { return [] as Ev[]; }
+  }));
+  const games = new Map<string, { id: string; starts_at: string; home: string; away: string }>();
+  for (const ev of lists.flat()) {
+    const c = ev.competitions?.[0], h = c?.competitors.find((x) => x.homeAway === "home"), a = c?.competitors.find((x) => x.homeAway === "away");
+    if (!ev.id || !ev.date || !h || !a || /tbd/i.test(h.team.displayName + a.team.displayName)) continue;
+    games.set(ev.id, { id: ev.id, starts_at: new Date(ev.date).toISOString(), home: h.team.displayName, away: a.team.displayName });
+  }
+  const rows = [...games.values()].sort((x, y) => Date.parse(x.starts_at) - Date.parse(y.starts_at));
+  if (rows.length) {
+    const { error } = await admin.from("nfl_schedule").upsert(rows.map((r) => ({ ...r, updated_at: new Date().toISOString() })));
+    if (error) return reply(500, { error: error.message });
+  }
+  return reply(200, { games: rows }, true);
+}
+
 /* ---------- the run ---------- */
 async function members(admin: Admin, pool: string, originator: string) {
   const inv = ((await admin.from("squares_invitees").select("uid").eq("pool_id", pool)).data ?? []).map((x: { uid: string }) => x.uid);
@@ -159,8 +191,12 @@ async function members(admin: Admin, pool: string, originator: string) {
 }
 const ptsText = (n: number) => `${n} pt${n === 1 ? "" : "s"}`;
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+  let body: { schedule?: string } = {};
+  try { body = (await req.json()) ?? {}; } catch (_) { /* cron sends {} */ }
+  if (body.schedule) return await schedule(admin, String(body.schedule));
   const drawn = (await admin.rpc("squares_tick")).data ?? 0;
 
   // 1. scores for games in progress
@@ -178,7 +214,7 @@ Deno.serve(async () => {
       } catch (e) { console.error("squares: ESPN failed", e); byDay.set(day, []); }
     }
     for (const ev of byDay.get(day)!) {
-      const qs = quartersDone(ev, g.home, g.away);
+      const qs = quartersDone(ev, g.home, g.away, g.game_id);
       if (!qs) continue;
       for (const r of qs) {
         if (r.q <= g.have) continue;
@@ -203,7 +239,7 @@ Deno.serve(async () => {
   for (const r of fresh ?? []) {
     await admin.from("squares_results").update({ notified_at: new Date().toISOString() }).eq("pool_id", r.pool_id).eq("game_id", r.game_id).eq("quarter", r.quarter);
     const { data: p } = await admin.from("squares_pools").select("id,title,originator").eq("id", r.pool_id).maybeSingle();
-    const { data: g } = await admin.from("vegas_lines").select("home,away").eq("id", r.game_id).maybeSingle();
+    const { data: g } = await admin.from("squares_games").select("home,away").eq("pool_id", r.pool_id).eq("game_id", r.game_id).maybeSingle();
     if (!p || !g) continue;
     const who = r.uid ? (((await admin.from("profiles").select("name").eq("id", r.uid).maybeSingle()).data?.name as string) || "Someone") : "Nobody";
     const when = r.quarter === 4 ? "Final" : `End of Q${r.quarter}`;
