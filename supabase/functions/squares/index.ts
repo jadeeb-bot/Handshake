@@ -300,6 +300,41 @@ Deno.serve(async (req) => {
     });
   }
 
+  // Pick 'em weeks that were just scored: tell everyone in the group who won (or that it rolled over)
+  const { data: scored } = await admin.from("pickem_weeks").select("*").is("notified_at", null).limit(20);
+  for (const w of scored ?? []) {
+    await admin.from("pickem_weeks").update({ notified_at: new Date().toISOString() }).eq("group_id", w.group_id).eq("week", w.week);
+    if ((w.entries ?? 0) < 2) continue; // no points moved: nothing to announce
+    const { data: grp } = await admin.from("pickem_groups").select("name").eq("id", w.group_id).maybeSingle();
+    if (!grp) continue;
+    const { data: res } = await admin.from("pickem_results").select("uid,correct,won,points").eq("group_id", w.group_id).eq("week", w.week);
+    const members = ((await admin.from("pickem_members").select("uid").eq("group_id", w.group_id)).data ?? []).map((m: { uid: string }) => m.uid);
+    const names = new Map<string, string>();
+    for (const u of new Set([...(res ?? []).map((r: { uid: string }) => r.uid), ...members])) {
+      names.set(u, ((await admin.from("profiles").select("name:display_name").eq("id", u).maybeSingle()).data?.name as string) || "Someone");
+    }
+    const wk = new Date(w.week + "T12:00:00Z").toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+    const winners = (res ?? []).filter((r: { won: boolean; points: number }) => r.won && r.points > 0);
+    const list = (a: string[]) => (a.length < 3 ? a.join(" and ") : a.slice(0, -1).join(", ") + " and " + a[a.length - 1]);
+    for (const u of members) {
+      const mine = (res ?? []).find((r: { uid: string }) => r.uid === u);
+      let body: string;
+      if (w.rolled || !winners.length) {
+        body = `You stunk it up, but so did everyone else — rollover in the ${grp.name} Pick 'em All! competition.`;
+      } else {
+        const right = winners[0].correct, of = w.games ? ` of ${w.games}` : "";
+        const who0 = list(winners.map((r: { uid: string }) => (r.uid === u ? "you" : names.get(r.uid)!)));
+        const who = who0.charAt(0).toUpperCase() + who0.slice(1);
+        const iWon = winners.some((r: { uid: string }) => r.uid === u);
+        body = winners.length > 1
+          ? `${who} tied for the week of ${wk} with ${right}${of} right (+${winners[0].points} pts each).`
+          : `${who} won the week of ${wk} with ${right}${of} right (+${winners[0].points} pts).`;
+        if (!iWon) body += mine ? ` You had ${mine.correct} right.` : " You didn't enter this week.";
+      }
+      sent += await deliver(admin, [u], { title: `Pick 'em All!: ${grp.name}`, body, tag: `pkweek-${w.group_id}-${w.week}` });
+    }
+  }
+
   // 3. quarter results
   const { data: fresh } = await admin.from("squares_results").select("*").is("notified_at", null);
   for (const r of fresh ?? []) {
