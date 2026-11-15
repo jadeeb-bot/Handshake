@@ -1361,6 +1361,7 @@ async function pkJoin(code) {
   code = String(code || "").trim().toUpperCase();
   if (!code) return toast("Type the invite code first.");
   if (/^W[0-9A-F]{6}$/.test(code)) return wfJoin(code);
+  if (/^S[0-9A-F]{6}$/.test(code)) return sqJoin(code);
   const { data, error } = await sb.rpc("join_pickem_group", { p_code: code });
   if (error) return toast(friendly(error));
   await loadPickem(); S.tab = "feed";
@@ -2110,9 +2111,10 @@ async function loadSquares() {
   const { data, error } = await sb.from("squares_pools").select("*").neq("status", "canceled").order("created_at", { ascending: false }).limit(40);
   if (error) { S.sq = { ...(S.sq || {}), off: true, list: [] }; return; }
   const ids = (data || []).map((p) => p.id), q = (t, col = "pool_id") => (ids.length ? sb.from(t).select("*").in(col, ids) : { data: [] });
-  const [g, cl, inv, cr, pd, rs] = await Promise.all([q("squares_games"), q("squares_claims"), q("squares_invitees"), q("squares_crash"), q("squares_paid"), q("squares_results")]);
+  const [g, cl, inv, cr, pd, rs, cd] = await Promise.all([q("squares_games"), q("squares_claims"), q("squares_invitees"), q("squares_crash"), q("squares_paid"), q("squares_results"), q("squares_codes")]);
   S.sq = { ...(S.sq || {}), off: false, list: data || [], games: (g.data || []).sort((a, b) => a.ord - b.ord), claims: cl.data || [], invitees: inv.data || [],
-    crash: cr.data || [], paid: pd.data || [], results: rs.data || [], lines: new Map((g.data || []).map((x) => [x.game_id, x])) };
+    crash: cr.data || [], paid: pd.data || [], results: rs.data || [], lines: new Map((g.data || []).map((x) => [x.game_id, x])),
+    codes: new Map((cd.error ? [] : cd.data || []).map((x) => [x.pool_id, x.code])) };
 }
 const sqGet = (id) => (S.sq?.list || []).find((p) => p.id === id);
 const sqOf = (key, id) => (S.sq?.[key] || []).filter((x) => x.pool_id === id);
@@ -2164,7 +2166,8 @@ function renderSquares() {
   return `<div style="display:flex;flex-direction:column;gap:14px">
     <div class="secthead"><h2>Squares</h2>${S.sq.form ? "" : `<button class="btn quiet" data-act="sqNew">Start a pool</button>`}</div>
     <span class="sub">A 10×10 grid on an NFL game. Claim squares; when they're gone, numbers 0–9 are drawn for each team. After each quarter, the square matching the last digit of each team's score wins.</span>
-    ${form}${cards ? `<div class="cards">${cards}</div>` : S.sq.form ? "" : `<div class="empty"><p>No pools yet.</p></div>`}</div>`;
+    ${form}${cards ? `<div class="cards">${cards}</div>` : S.sq.form ? "" : `<div class="empty"><p>No pools yet.</p></div>`}
+    <div class="pkjoin"><input id="sqCode" maxlength="7" placeholder="Pool code" autocomplete="off" autocapitalize="characters" aria-label="Pool code"><button class="btn" data-act="sqJoinCode">Join</button></div></div>`;
 }
 // The form's payouts as [{game_id, pct[4]}] (percent of the whole pot)
 function sqFormPct(f) {
@@ -2204,6 +2207,20 @@ async function sqLoadWeek(w) {
     done(data.games.filter((g) => nflWeek(g.starts_at) === w));
   } catch (e) { done("err"); }
 }
+function sqInviteText(p, code) {
+  const gs = sqOf("games", p.id).map((g) => S.sq.lines.get(g.game_id)).filter(Boolean);
+  const games = gs.map((g) => `${nick(g.away)} at ${nick(g.home)}`).join(", ");
+  return hs(`Join my Squares pool "${p.title}" on Handshake${games ? ` (${games})` : ""}. It's ${p.price} pts a square. Tap to join and pick your squares: ${PAGE_URL}?join=${code} (or enter code ${code} on the Squares tab).`);
+}
+async function sqJoin(code) {
+  const { data, error } = await sb.rpc("squares_join", { p_code: code });
+  if (error) return toast(friendly(error));
+  liveUnsub("rsvp"); liveUnsub("contest"); wfUnsub(); S.pkView = null; S.tab = "squares";
+  await loadSquares(); sqOpen(data);
+  const p = sqGet(data);
+  toast(p ? (p.status === "open" ? `You're in ${p.title}. Pick your squares!` : `You're in ${p.title}. Squares are closed, but you can follow along.`) : "You're in.");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
 async function sqCreate() {
   sqFormCapture();
   const f = S.sq.form, err = (m) => { const x = $("#sqErr"); if (x) { x.textContent = m; x.hidden = false; } };
@@ -2215,10 +2232,10 @@ async function sqCreate() {
   const { data, error } = await sb.rpc("create_squares", { p_title: f.title.trim(), p_price: parseInt(f.price, 10), p_games: games, p_invitees: f.inv });
   if (error) return err(friendly(error));
   notifyQuiet({ squares_pool: data, kind: "new" });
-  S.sq.form = null; await loadSquares(); sqOpen(data); toast("Pool started. Pick your squares.");
+  S.sq.form = null; await loadSquares(); sqOpen(data); S.sq.inviting = data; render(); toast("Pool started. Send the invite link, then pick your squares.");
 }
 function sqOpen(id) {
-  S.sq.view = { id, game: 0 }; S.sq.sel = []; S.sq.buyin = null; S.sq.fix = null; render();
+  S.sq.view = { id, game: 0 }; S.sq.sel = []; S.sq.buyin = null; S.sq.fix = null; S.sq.inviting = null; render();
   liveSub("squares", [["squares_claims", "pool_id=eq." + id], ["squares_pools", "id=eq." + id], ["squares_results", "pool_id=eq." + id], ["squares_crash", "pool_id=eq." + id]],
     async () => { if (S.tab === "squares" && S.sq?.view?.id === id) { await loadSquares(); render(); } });
 }
@@ -2235,6 +2252,11 @@ function renderSquaresPool() {
   const drawn = !!p.digits_home;
   let out = `<div class="sub">${isOrig ? "Your pool" : "Started by " + esc(sqWho(p.originator))} · <b>${p.price} pts</b> a square · pot <b>${100 * p.price}</b></div>
     <div class="wfstakes"><span>${sqStatus(p)}</span><span>${sqPayLine(p)}</span></div>`;
+  const code = S.sq.codes?.get(p.id);
+  if (member && code && p.status !== "done") out += S.sq.inviting === p.id
+    ? `<div class="cpanel"><span class="lab">Invite link · code <b class="mono">${esc(code)}</b></span><span class="sub">Anyone with the link or code joins the pool and can pick squares.</span><p class="msg">${esc(sqInviteText(p, code))}</p>
+      <div class="acts"><button class="btn primary" data-act="sqInvCopy">Copy invite</button><a class="btn" href="${esc(smsHref("", sqInviteText(p, code)))}">Open Messages</a><button class="btn ghost" data-act="sqInvClose">Close</button></div></div>`
+    : `<div class="acts"><button class="btn ghost" data-act="sqInvOpen">Invite with a link</button></div>`;
   // crashing
   if (!member && open) {
     const r = sqOf("crash", p.id).find((x) => x.uid === S.me);
@@ -2409,6 +2431,10 @@ const ACT = {
   sqNew: () => { S.sq.form = { title: "", price: "5", games: [], same: true, pct: { all: ["20", "20", "20", "40"] }, inv: [], week: nflWeek(Date.now()) }; render(); },
   sqWeekRetry: () => { S.sq.sched?.delete(S.sq.form.week); render(); },
   sqCancelForm: () => { S.sq.form = null; render(); },
+  sqInvOpen: () => { S.sq.inviting = S.sq.view.id; render(); },
+  sqInvClose: () => { S.sq.inviting = null; render(); },
+  sqInvCopy: () => { const p = sqGet(S.sq.view.id); copy(sqInviteText(p, S.sq.codes.get(p.id)), "Invite copied. Paste it into your group text."); },
+  sqJoinCode: () => { const c = ($("#sqCode")?.value || "").trim().toUpperCase(); if (!c) return toast("Type the pool code first."); sqJoin(c); },
   sqCreate: () => sqCreate(),
   sqOpen: (el) => sqOpen(el.dataset.id),
   sqBack: () => { liveUnsub("squares"); S.sq.view = null; S.sq.drawArm = false; loadSquares().then(render); render(); },
