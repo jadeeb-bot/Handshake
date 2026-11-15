@@ -98,6 +98,13 @@ button{cursor:pointer}
 .sqpct input{width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;background:var(--slip);color:var(--ink)}
 .sqgames{display:flex;flex-direction:column;gap:6px;font-size:15px}.sqgames label{display:flex;gap:8px;align-items:center}
 .pkinvited{background:color-mix(in srgb,var(--good) 12%,transparent);border-radius:10px;padding:8px 12px;font-size:15px}
+.modbtn{margin-left:auto;background:none;border:0;color:var(--muted);font-size:18px;line-height:1;padding:0 4px;cursor:pointer;border-radius:6px}
+.modbtn:hover{background:var(--rule)}
+.modsheet{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-end;justify-content:center;z-index:60;padding:12px}
+.modsheet .card{width:100%;max-width:520px;display:flex;flex-direction:column;gap:10px;max-height:85vh;overflow:auto}
+.modsheet input{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px;font-size:15px;background:var(--slip);color:var(--ink)}
+.secthead .acts{display:flex;align-items:center;gap:6px}
+.rname .modbtn{margin-left:auto}
 .sqbad{color:var(--stamp);font-weight:600}
 .sqtabs{display:flex;flex-wrap:wrap;gap:6px}
 .sqboard{display:flex;flex-direction:column;gap:2px;background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:8px}
@@ -355,7 +362,7 @@ a.btn.primary{color:var(--slip)}
 .act-item .when{flex:none;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .act-item.unread .what::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--pen);margin-right:8px;vertical-align:1px}
 .pushbox{background:var(--chip);border-radius:10px;padding:10px 12px;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;font-size:13.5px}
-.who{display:flex;gap:8px;align-items:center;font-size:13px;color:var(--muted)}
+.who{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 8px;align-items:center;font-size:13px;color:var(--muted)}.who>*{white-space:nowrap}.who #whoName{flex-basis:100%;text-align:center}
 .gate{background:var(--slip);border-radius:12px;box-shadow:var(--shadow);padding:22px 18px;display:flex;flex-direction:column;gap:14px;border-top:4px solid var(--pen);max-width:440px;width:100%;margin:0 auto}
 .gate h2{font-family:var(--f-display);font-stretch:78%;font-weight:800;font-size:28px;margin:0;line-height:1.05}
 .gate p{margin:0;color:var(--muted)}
@@ -508,7 +515,7 @@ a.btn.primary{color:var(--slip)}
 
   <footer class="foot">
     <span class="hand">A handshake still means something.</span>
-    <span class="who" id="who" hidden><span id="whoName"></span><button class="btn quiet" data-act="rename">Change name</button><button class="btn quiet" data-act="signOut">Sign out</button></span>
+    <span class="who" id="who" hidden><span id="whoName"></span><button class="btn quiet" data-act="rename">Change name</button><button class="btn quiet" id="blockedBtn" data-act="modList" hidden>Blocked</button><button class="btn quiet" id="reportsBtn" data-act="tab" data-v="reports" hidden>Reports</button><button class="btn quiet" data-act="signOut">Sign out</button></span>
   </footer>
 </div>
 <div class="toast" id="toast" hidden role="status"></div>

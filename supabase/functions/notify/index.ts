@@ -418,6 +418,19 @@ async function squaresNote(admin: Admin, caller: string, body: { squares_pool?: 
   return reply(200, { sent: 0, reason: "nothing new" });
 }
 
+/* ---------- reports go to the moderators ---------- */
+async function reportNote(admin: Admin, caller: string, body: { report_id?: string }) {
+  if (!isId(body.report_id)) return reply(400, { error: "report_id is wrong." });
+  const { data: r } = await admin.from("reports").select("*").eq("id", body.report_id).maybeSingle();
+  if (!r || r.reporter !== caller || !recent(r.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
+  const mods = ((await admin.from("app_admins").select("uid")).data || []).map((x: { uid: string }) => x.uid).filter((u: string) => u !== caller);
+  if (!mods.length) return reply(200, { sent: 0, reason: "no moderators set up" });
+  const kinds: Record<string, string> = { prediction: "prediction", contest: "contest", rsvp: "plan", squares: "Squares pool", pickem: "Pick 'em group", wolf: "golf round", profile: "name" };
+  const sent = await deliver(admin, mods, { title: "Report: " + (kinds[r.kind] || r.kind),
+    body: `"${String(r.excerpt).slice(0, 80)}"${r.reason ? ": " + String(r.reason).slice(0, 80) : ""}. Open Handshake → Reports to remove or dismiss it.`, tag: "report-" + r.id });
+  return reply(200, { sent });
+}
+
 /* ---------- the request ---------- */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -431,7 +444,7 @@ Deno.serve(async (req) => {
   const caller = who.user.id;
   console.log("notify: from", caller, "key type", SERVICE_KEY.startsWith("sb_secret_") ? "secret" : SERVICE_KEY.startsWith("eyJ") ? "legacy service_role" : "unknown");
 
-  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string; rsvp_event?: string; contest_id?: string; kind?: string; squares_pool?: string } = {};
+  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string; rsvp_event?: string; contest_id?: string; kind?: string; squares_pool?: string; report_id?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
   if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
   if (body.pickem_group && body.kind === "invite") return await pkInviteNote(admin, caller, body);
@@ -440,6 +453,7 @@ Deno.serve(async (req) => {
   if (body.rsvp_event) return await rsvpNote(admin, caller, body);
   if (body.contest_id) return await contestNote(admin, caller, body);
   if (body.squares_pool) return await squaresNote(admin, caller, body);
+  if (body.report_id) return await reportNote(admin, caller, body);
   const predictionId = String(body.prediction_id ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(predictionId)) return reply(400, { error: "prediction_id is required." });
 

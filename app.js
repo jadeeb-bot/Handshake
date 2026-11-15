@@ -28,6 +28,34 @@ const CFG = window.HANDSHAKE_CONFIG || {};
 const configured = CFG.supabaseUrl && !CFG.supabaseUrl.includes("YOUR-PROJECT") && CFG.supabaseAnonKey && !CFG.supabaseAnonKey.includes("YOUR-");
 const sb = configured && createClient ? createClient(CFG.supabaseUrl, CFG.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true } }) : null;
 
+/* ---------- Keep it fun: typed text is checked (word list + Claude) before it's saved ---------- */
+const names = (list) => (list || []).map((x) => x?.name);
+const TEXT_ARGS = {
+  create_prediction: (a) => [a.p_title, a.p_with_name, a.p_terms, a.p_stake_text],
+  fix_invite: (a) => [a.p_name], counter_offer: (a) => [a.p_text], answer_proof: (a) => [a.p_reason],
+  create_pickem_group: (a) => [a.p_name], create_wolf_round: (a) => [a.p_course, ...names(a.p_players)],
+  create_rsvp: (a) => [a.p_title, a.p_venue, a.p_notes, ...names(a.p_phones)], rsvp_invite: (a) => names(a.p_phones),
+  rsvp_lock: (a) => [a.p_venue, ...names(a.p_phones)], rsvp_add_venue: (a) => [a.p_name],
+  create_contest: (a) => [a.p_title, ...(a.p_choices || [])], contest_enter: (a) => [a.p_choice], contest_record: (a) => [a.p_result],
+  contest_prove_it: (a) => [a.p_reason], contest_doesnt_hold: (a) => [a.p_reason], create_squares: (a) => [a.p_title],
+};
+async function keepItFun(texts) {
+  texts = (texts || []).filter((t) => typeof t === "string" && t.trim());
+  if (!texts.length) return null;
+  try {
+    const { data, error } = await sb.functions.invoke("screen", { body: { texts } });
+    if (error || !data) return null; // not set up yet: the database word list still applies
+    return data.ok === false ? data.message || "Keep it fun: that isn't allowed on Handshake." : null;
+  } catch (e) { return null; }
+}
+if (sb) {
+  const rpc0 = sb.rpc.bind(sb);
+  sb.rpc = (fn, args, ...rest) => !TEXT_ARGS[fn] ? rpc0(fn, args, ...rest) : (async () => {
+    const why = await keepItFun(TEXT_ARGS[fn](args || {}));
+    return why ? { data: null, error: { message: why } } : rpc0(fn, args, ...rest);
+  })();
+}
+
 const S = {
   me: null, myName: "", email: "", bets: [], people: [], loaded: false,
   tab: "board", filter: "all", sort: store.get("hs-sort") || "needs", feedFilter: "crash",
@@ -537,7 +565,7 @@ function slip(b) {
   const cls = "slip" + (needsMe(b) || canSign(b) ? " attn" : "") + (stamp ? " has-stamp" : "") + (S.fresh === b.id ? " newly" : "");
   return `<article class="${cls}" id="bet-${b.id}">
     ${stamp}
-    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}</div>
+    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}${modBtn("prediction", b.id, o ? b[o]?.uid : b.a?.uid)}</div>
     <h3>${esc(b.title)}</h3>${crashLine(b)}
     ${b.terms ? `<p class="terms">${esc(b.terms)}</p>` : ""}
     <div class="row">${b.counter && b.status === "proposed"
@@ -830,7 +858,7 @@ function feedCard(b) {
   else if (["proposed", "open"].includes(b.status) && !b.parentId && side(b)) tail = `<span class="sub">You're in this one.</span>`;
   else if (["proposed", "open"].includes(b.status) && !b.parentId && liveKids(b).some((k) => k.a?.uid === S.me)) tail = `<span class="sub">You already crashed this one.</span>`;
   return `<article class="fcard ${b.parentId ? "crash" : ""}">
-    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}</div>
+    <div class="slip-top"><span class="no">No. ${esc(shortNo(b.id))}</span><span class="cat">${esc(b.category || "Other")}</span>${visTag(b)}${b.parentId ? `<span class="tagc">Crash on No. ${shortNo(b.parentId)}</span>` : ""}${statusChip(b)}${modBtn("prediction", b.id, b.a?.uid === S.me ? b.b?.uid : b.a?.uid)}</div>
     <h3>${esc(b.title)}</h3>
     <div class="vs">${vs}</div>
     <div class="row">${isOther(b) ? `<span class="stake text">${esc(stakeLabel(b))}</span>` : `<span class="stake" style="font-size:16px">${p} <small>pts</small></span>`}${dueText(b)}</div>
@@ -856,7 +884,7 @@ function crashPanel(b) {
 }
 const FEED_FILTERS = [["crash", "Open to crash"], ["live", "In play"], ["all", "Everything"]];
 function renderFeed() {
-  const bets = S.bets.filter((b) => !b.pickem && !b.wolf && !b.contest);
+  const bets = S.bets.filter((b) => !b.pickem && !b.wolf && !b.contest && !isBlockedBet(b));
   if (!bets.length) return `<div style="display:flex;flex-direction:column;gap:22px">${pkSection()}<div class="empty"><h3>Nothing on the board yet</h3><p>Every Full Monty prediction shows up here, newest first, plus Circle of Trust ones from people you've played. Pending ones can be crashed.</p></div></div>`;
   const pass = (b, f) => (f === "crash" ? crashable(b) : f === "live" ? isLive(b) : true);
   const list = bets.filter((b) => pass(b, S.feedFilter)).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -973,7 +1001,7 @@ function renderRivalsInner(table, rs) {
   const cards = rs.map((r) => {
     const tot = r.w + r.l + r.t || 1;
     const settledLine = r.lastSettled ? `<div class="sub">Last settled ${new Date(r.lastSettled.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}: ${pts(r.lastSettled.points)} ${r.lastSettled.byMe ? "cleared by you" : "cleared by " + esc(r.name)}</div>` : "";
-    return `<div class="card"><div class="rname"><span class="av">${esc(initials(r.name))}</span><h3>You vs ${esc(r.name)}</h3></div>
+    return `<div class="card"><div class="rname"><span class="av">${esc(initials(r.name))}</span><h3>You vs ${esc(r.name)}</h3>${r.uid ? modBtn("profile", r.uid, r.uid) : ""}</div>${r.uid && S.blocked?.has(r.uid) ? `<span class="sub">You blocked ${esc(r.name)}. <button class="btn quiet" data-act="modUnblock" data-u="${r.uid}">Unblock</button></span>` : ""}
       <span class="lab">Current balance</span>
       <div class="score ${tone(r.current)}">${signed(r.current)}<small>pts</small></div>
       <div class="sub">All-time: <b class="mono ${tone(r.score)}">${signed(r.score)} pts</b> · ${r.w}–${r.l}${r.t ? "–" + r.t : ""}</div>
@@ -1134,12 +1162,12 @@ function pkCard(g) {
       <div class="acts"><button class="btn primary" data-act="pkCopyInvite" data-id="${g.id}">Copy invite</button><a class="btn" href="${esc(smsHref("", text))}">Open Messages</a><button class="btn ghost" data-act="pkCloseInvite">Close</button></div></div>`;
   }
   return `<article class="card pkcard">
-    <div class="slip-top"><span class="cat">Pick 'em All!</span><span class="sub">${rows.length} member${rows.length === 1 ? "" : "s"}</span></div>
+    <div class="slip-top"><span class="cat">Pick 'em All!</span><span class="sub">${rows.length} member${rows.length === 1 ? "" : "s"}</span>${modBtn("pickem", g.id, g.created_by)}</div>
     <h3>${esc(g.name)}</h3>${lastLine}${potLine}${reqRows}${table}${acts}${invite}</article>`;
 }
 function pkSection() {
   if (!S.pk || S.pk.off) return "";
-  const groups = S.pk.groups.slice().sort((a, b) => pkIsMember(b.id) - pkIsMember(a.id) || !!pkMyInvite(b.id) - !!pkMyInvite(a.id) || Date.parse(b.created_at) - Date.parse(a.created_at));
+  const groups = S.pk.groups.filter((g) => pkIsMember(g.id) || !S.blocked?.has(g.created_by)).sort((a, b) => pkIsMember(b.id) - pkIsMember(a.id) || !!pkMyInvite(b.id) - !!pkMyInvite(a.id) || Date.parse(b.created_at) - Date.parse(a.created_at));
   const create = S.pkNaming
     ? `<div class="card"><div class="field"><label for="pkName">Name your group</label><input id="pkName" maxlength="30" placeholder="Sunday Degenerates" autocomplete="off"></div>
         <p class="err" id="pkErr" hidden></p><div class="acts"><button class="btn primary" data-act="pkCreate">Start the group</button><button class="btn ghost" data-act="pkUnname">Cancel</button></div></div>`
@@ -1793,7 +1821,7 @@ function renderRsvp() {
     ${form}${cards ? `<div class="cards">${cards}</div>` : S.rsvp.form ? "" : `<div class="empty"><p>Nothing planned yet.</p></div>`}</div>`;
 }
 function renderRsvpEvent() {
-  const v = S.rsvp.view, head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="rvBack">‹ All plans</button></div>`;
+  const v = S.rsvp.view, head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><span class="acts">${modBtn("rsvp", v.id, v.e?.organizer)}<button class="btn quiet" data-act="rvBack">‹ All plans</button></span></div>`;
   if (!v.e) return `<div style="display:flex;flex-direction:column;gap:14px">${head("RSVP")}<div class="empty"><p>${esc(v.err || "Loading…")}</p></div></div>`;
   const e = v.e, org = e.organizer === S.me, open = e.status === "open", members = [e.organizer, ...v.inv];
   const nm = (u) => { if (String(u).startsWith("p:")) { const x = (v.numbers || []).find((y) => y.phone_digits === u.slice(2)); return x ? x.name + " (by text)" : "Texted guest"; } return u === S.me ? "You" : personName(u) || "Someone"; };
@@ -2025,7 +2053,7 @@ function renderContests() {
       <p class="err" id="ctErr" hidden></p>
       <div class="acts"><button class="btn primary" data-act="ctCreate">Start the contest</button><button class="btn ghost" data-act="ctCancelForm">Cancel</button></div></div>`;
   }
-  const cards = S.ct.list.map((c) => {
+  const cards = S.ct.list.filter((c) => c.sponsor === S.me || !S.blocked?.has(c.sponsor) || S.ct.entries.some((x) => x.contest_id === c.id && x.uid === S.me)).map((c) => {
     const n = S.ct.entries.filter((x) => x.contest_id === c.id).length;
     return `<article class="card wfround" data-act="ctOpen" data-id="${c.id}"><div class="slip-top"><span class="cat">Contest</span><span class="sub">${c.sponsor === S.me ? "You're sponsoring" : "From " + esc(personName(c.sponsor) || "a friend")} · ${n} entr${n === 1 ? "y" : "ies"} · pot ${n * c.points}</span></div>
       <h3>${esc(c.title)}</h3><span class="sub">${ctStageLine(c)}</span></article>`;
@@ -2036,7 +2064,7 @@ function renderContests() {
     ${form}${cards ? `<div class="cards">${cards}</div>` : S.ct.form ? "" : `<div class="empty"><p>No contests yet.</p></div>`}</div>`;
 }
 function renderContest() {
-  const c = ctGet(S.ct.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="ctBack">‹ All Contests</button></div>`;
+  const c = ctGet(S.ct.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><span class="acts">${modBtn("contest", c.id, c.sponsor)}<button class="btn quiet" data-act="ctBack">‹ All Contests</button></span></div>`;
   if (!c) { S.ct.view = null; return renderContests(); }
   const nm = (u) => (u === S.me ? "You" : personName(u) || "Someone");
   const entries = S.ct.entries.filter((x) => x.contest_id === c.id), mine = entries.filter((x) => x.uid === S.me);
@@ -2158,7 +2186,7 @@ function renderSquares() {
       <p class="err" id="sqErr" hidden></p>
       <div class="acts"><button class="btn primary" data-act="sqCreate">Start the pool</button><button class="btn ghost" data-act="sqCancelForm">Cancel</button></div></div>`;
   }
-  const cards = S.sq.list.map((p) => {
+  const cards = S.sq.list.filter((p) => sqMember(p) || !S.blocked?.has(p.originator)).map((p) => {
     const gs = sqOf("games", p.id).map((g) => S.sq.lines.get(g.game_id)).filter(Boolean);
     return `<article class="card wfround" data-act="sqOpen" data-id="${p.id}"><div class="slip-top"><span class="cat">Squares</span><span class="sub">${p.originator === S.me ? "Your pool" : "From " + esc(personName(p.originator) || "a friend")} · ${p.price} pts a square</span></div>
       <h3>${esc(p.title)}</h3><span class="sub">${esc(gs.map((g) => nick(g.away) + " at " + nick(g.home)).join(", "))} · ${sqStatus(p)}</span></article>`;
@@ -2242,7 +2270,7 @@ function sqOpen(id) {
 const sqWho = (u) => (u === S.me ? "You" : personName(u) || "Someone");
 const sqFirst = (u) => (u === S.me ? "You" : String(personName(u) || "?").split(/\s+/)[0]);
 function renderSquaresPool() {
-  const p = sqGet(S.sq.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="sqBack">‹ All pools</button></div>`;
+  const p = sqGet(S.sq.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><span class="acts">${modBtn("squares", p.id, p.originator)}<button class="btn quiet" data-act="sqBack">‹ All pools</button></span></div>`;
   if (!p) { S.sq.view = null; return renderSquares(); }
   const isOrig = p.originator === S.me, member = sqMember(p), open = p.status === "open";
   const claims = sqOf("claims", p.id), byNum = new Map(claims.map((c) => [c.square, c])), sel = S.sq.sel || [];
@@ -2338,13 +2366,68 @@ async function sqAct(fn, args, note, kind, extra) {
   return data ?? true;
 }
 
+/* ---------- Report, Block, and the moderator's Reports list ---------- */
+const MOD_KIND = { prediction: "prediction", contest: "contest", rsvp: "plan", squares: "Squares pool", pickem: "Pick 'em group", wolf: "golf round", profile: "name" };
+const modBtn = (kind, id, uid) => (S.me && id ? `<button class="modbtn" data-act="modOpen" data-k="${kind}" data-id="${esc(id)}" data-u="${esc(uid || "")}" aria-label="Report or block">⋯</button>` : "");
+const isBlockedBet = (b) => !!S.blocked?.size && !side(b) && (S.blocked.has(b.a?.uid) || S.blocked.has(b.b?.uid));
+async function loadMod() {
+  const [bl, ad] = await Promise.all([sb.from("user_blocks").select("blocked"), sb.from("app_admins").select("uid")]);
+  S.modOn = !bl.error;
+  S.blocked = new Set((bl.error ? [] : bl.data || []).map((x) => x.blocked));
+  S.isAdmin = !ad.error && (ad.data || []).length > 0;
+  if (S.isAdmin) await loadReports();
+  modFoot();
+}
+async function loadReports() {
+  const { data, error } = await sb.from("reports").select("*").order("created_at", { ascending: false }).limit(100);
+  S.reports = error ? [] : data || [];
+  modFoot();
+}
+function modFoot() {
+  const r = $("#reportsBtn"), b = $("#blockedBtn"), open = (S.reports || []).filter((x) => x.status === "open").length;
+  if (r) { r.hidden = !S.isAdmin; r.textContent = "Reports" + (open ? ` (${open})` : ""); }
+  if (b) { b.hidden = !S.blocked?.size; b.textContent = `Blocked (${S.blocked?.size || 0})`; }
+}
+function modSheet() {
+  const m = S.mod; if (!m) return "";
+  if (m.list) {
+    const rows = [...(S.blocked || [])].map((u) => `<div class="rvvenue"><span><b>${esc(personName(u) || "Someone")}</b></span><button class="btn ghost" data-act="modUnblock" data-u="${u}">Unblock</button></div>`).join("");
+    return `<div class="modsheet" role="dialog" aria-label="Blocked people"><div class="card"><h3>Blocked people</h3><span class="sub">You don't see their predictions on Everyone or their pools, contests and groups, and neither of you can make a prediction with the other.</span>${rows || `<span class="sub">Nobody.</span>`}<div class="acts"><button class="btn ghost" data-act="modClose">Close</button></div></div></div>`;
+  }
+  const who = m.uid && m.uid !== S.me ? personName(m.uid) || "this person" : "", blocked = m.uid && S.blocked?.has(m.uid);
+  return `<div class="modsheet" role="dialog" aria-label="Report or block"><div class="card">
+    <h3>Report this ${esc(MOD_KIND[m.kind] || "post")}</h3>
+    <span class="sub">Something here that isn't fun? Handshake has no room for profanity, sexual, violent, hateful or political content. A moderator will look at it.</span>
+    <div class="field"><label for="modReason">What's wrong (optional)</label><input id="modReason" maxlength="300" placeholder="e.g. it's political" autocomplete="off"></div>
+    <div class="acts"><button class="btn primary" data-act="modReport">Send report</button></div>
+    ${who ? `<span class="lab">${blocked ? "Blocked" : "Block " + esc(who)}</span>
+      <span class="sub">${blocked ? `You blocked ${esc(who)}.` : `You won't see ${esc(who)}'s predictions on Everyone or their pools, contests and groups, and neither of you can make a prediction with the other. They aren't told.`}</span>
+      <div class="acts">${blocked ? `<button class="btn ghost" data-act="modUnblock" data-u="${m.uid}">Unblock</button>` : `<button class="btn" data-act="modBlock">Block ${esc(who)}</button>`}</div>` : ""}
+    <div class="acts"><button class="btn ghost" data-act="modClose">Cancel</button></div></div></div>`;
+}
+function renderReports() {
+  if (!S.isAdmin) return `<div class="empty"><p>Only moderators can see reports.</p></div>`;
+  if (!S.reports) { loadReports().then(render); return `<div class="empty"><p>Loading…</p></div>`; }
+  const open = S.reports.filter((r) => r.status === "open"), done = S.reports.filter((r) => r.status !== "open").slice(0, 20);
+  const when = (t) => new Date(t).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  const card = (r) => `<article class="card"><div class="slip-top"><span class="cat">${esc(MOD_KIND[r.kind] || r.kind)}</span><span class="sub">${esc(when(r.created_at))} · reported by ${esc(personName(r.reporter) || "someone")}</span></div>
+    <h3>${esc(r.excerpt || "(no text)")}</h3>
+    <span class="sub">Posted by <b>${esc(personName(r.item_uid) || "someone")}</b>${r.reason ? ` · “${esc(r.reason)}”` : ""}</span>
+    ${r.status === "open" ? `<div class="acts"><button class="btn primary" data-act="modResolve" data-id="${r.id}" data-v="remove">Remove it</button><button class="btn" data-act="modResolve" data-id="${r.id}" data-v="suspend">Remove + suspend ${esc(personName(r.item_uid) || "poster")}</button><button class="btn ghost" data-act="modResolve" data-id="${r.id}" data-v="dismiss">Dismiss</button></div>`
+      : `<span class="sub">${r.status === "removed" ? "Removed" : "Dismissed"}${r.note ? " · " + esc(r.note) : ""} · ${esc(when(r.handled_at))}</span>`}</article>`;
+  return `<div style="display:flex;flex-direction:column;gap:14px"><div class="secthead"><h2>Reports</h2><span class="sub">${open.length} open</span></div>
+    <span class="sub">Remove replaces the text with "Removed by Handshake" (and cancels it if it hasn't started). Suspend also stops that person from posting. To lift a suspension: SQL Editor → update profiles set suspended = false where name = '…';</span>
+    ${open.length ? `<div class="cards">${open.map(card).join("")}</div>` : `<div class="empty"><p>No open reports.</p></div>`}
+    ${done.length ? `<span class="lab">Handled</span><div class="cards">${done.map(card).join("")}</div>` : ""}</div>`;
+}
+
 function render() {
   renderLedger(); renderBell();
   for (const t of ["board", "feed", "rivals", "vegas", "golf", "rsvp", "contest", "squares", "quanto"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   try { const net = rivals().reduce((t, r) => t + (r.current || 0), 0), q = $("#quantoSub"); if (q) q.textContent = net ? (net > 0 ? "you're owed " + pts(net) : "you owe " + pts(-net)) + " net" : "all square"; } catch (e) {}
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = S.tab === "quanto" ? renderQuanto() : S.tab === "squares" ? renderSquares() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
+  v.innerHTML = (S.tab === "reports" ? renderReports() : S.tab === "quanto" ? renderQuanto() : S.tab === "squares" ? renderSquares() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard()) + modSheet();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -2513,6 +2596,32 @@ const ACT = {
   wfDelete: () => wfDelete(),
   pkSubmit: () => pkSubmit(),
   pkBonus: (el) => pkBonus(el.dataset.id),
+  modOpen: (el) => { S.mod = { kind: el.dataset.k, id: el.dataset.id, uid: el.dataset.u || null }; render(); setTimeout(() => $("#modReason")?.focus(), 30); },
+  modClose: () => { S.mod = null; render(); },
+  modList: () => { S.mod = { list: true }; render(); },
+  modReport: async () => {
+    const m = S.mod, why = ($("#modReason")?.value || "").trim();
+    const { data, error } = await sb.rpc("report_content", { p_kind: m.kind, p_id: m.id, p_reason: why });
+    if (error) return toast(friendly(error));
+    notifyQuiet({ report_id: data }); S.mod = null; render(); toast("Reported. Thanks for keeping it fun.");
+  },
+  modBlock: async () => {
+    const m = S.mod, who = personName(m.uid) || "them";
+    const { error } = await sb.rpc("block_user", { p_uid: m.uid, p_on: true });
+    if (error) return toast(friendly(error));
+    S.mod = null; await loadMod(); render(); toast(`Blocked ${who}.`);
+  },
+  modUnblock: async (el) => {
+    const { error } = await sb.rpc("block_user", { p_uid: el.dataset.u, p_on: false });
+    if (error) return toast(friendly(error));
+    await loadMod(); if (S.mod?.list && !S.blocked.size) S.mod = null; if (S.mod && !S.mod.list) S.mod = null; render(); toast("Unblocked.");
+  },
+  modResolve: async (el) => {
+    const { error } = await sb.rpc("resolve_report", { p_report: el.dataset.id, p_action: el.dataset.v });
+    if (error) return toast(friendly(error));
+    await Promise.all([loadReports(), loadBets(), loadPeople()]); S.pk = null; S.ct = null; S.sq = null; S.rsvp = null; loadPickem().catch(() => {}); render();
+    toast(el.dataset.v === "dismiss" ? "Dismissed." : el.dataset.v === "suspend" ? "Removed, and the poster is suspended." : "Removed.");
+  },
   pkCrash: (el) => pkCrash(el.dataset.id),
   pkInvSend: (el) => pkInvSend(el.dataset.id),
   pkInvAnswer: (el) => pkInvAnswer(el.dataset.id, el.dataset.v === "1"),
@@ -3274,6 +3383,8 @@ $("#nameForm").addEventListener("submit", async (e) => {
   const name = $("#gName").value.trim();
   if (!name) { err.textContent = "Add a name your friends will recognize."; err.hidden = false; return; }
   const btn = $("#nameBtn"); btn.disabled = true;
+  const why = await keepItFun([name]);
+  if (why) { btn.disabled = false; err.textContent = why; err.hidden = false; return; }
   const { error } = await sb.from("profiles").upsert({ id: S.me, name });
   btn.disabled = false;
   if (error) { err.textContent = friendly(error); err.hidden = false; return; }
@@ -3291,7 +3402,7 @@ async function enterOnce() {
   if (!prof?.name) { $("#gName").value = ""; return showGate("name"); }
   S.myName = prof.name; $("#whoName").textContent = "Signed in as " + prof.name;
   showGate(null); render();
-  try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {}), loadContests().catch(() => {}), loadVenmo().catch(() => {})]); render(); }
+  try { await Promise.all([loadBets(), loadPeople(), loadSettlements(), loadPickem().catch(() => {}), loadContests().catch(() => {}), loadVenmo().catch(() => {}), loadMod().catch(() => {})]); render(); }
   catch (e) { $("#view").innerHTML = `<div class="empty"><h3>Couldn't open the board</h3><p>${esc(friendly(e))}</p><button class="btn" onclick="location.reload()">Reload</button></div>`; return; }
   if (!started) { started = true; liveUpdates(); setupAppPush(); }
   clearBadge();
