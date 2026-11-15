@@ -98,7 +98,7 @@ function fromRow(r) {
     objection: r.objection || "", referee: r.referee_uid || r.referee_name ? { uid: r.referee_uid, name: r.referee_name || "the referee" } : null,
     parentId: r.parent_id, parentSide: r.parent_side, backsName: r.backs_name,
     counter: r.counter_by ? { by: r.counter_by, uid: r.counter_uid, kind: r.counter_kind, points: r.counter_points, text: r.counter_text } : null,
-    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null, pickem: r.pickem_group || null, wolf: r.wolf_round || null, contest: r.contest_id || null,
+    shakeBy: r.shake_by ? Date.parse(r.shake_by) : null, pickem: r.pickem_group || (r.pickem_name ? "gone" : null), wolf: r.wolf_round || null, contest: r.contest_id || null,
     createdAt: Date.parse(r.created_at), decidedAt: r.decided_at ? Date.parse(r.decided_at) : null, log: r.log || [],
   };
 }
@@ -1359,7 +1359,7 @@ function renderPickem() {
   const rolled = S.pk.carry.filter((c) => c.group_id === g.id).length;
   const head = `<div class="secthead"><h2><button class="pkname" data-act="pkAll" data-id="${g.id}" title="See everyone's picks">${esc(g.name)}</button></h2><button class="btn quiet" data-act="pkBack">‹ All groups</button></div>
     <span class="lab">Standings</span>${pkStandings(g)}${rolled ? `<div class="pkpot">💰 <b>${rolled * 5} pts rolled over</b> and waiting for this week's winner.</div>` : ""}
-    <span class="lab">Results</span>${pkResults(g)}
+    <span class="lab">Results</span>${pkResults(g)}${g.created_by === S.me ? pkDeleteBox(g) : ""}
     <span class="lab">Picks</span>${nav}`;
   if (v.games === null) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>Loading the week…</p></div></div>`;
   if (v.err) return `<div style="display:flex;flex-direction:column;gap:14px">${head}<div class="empty"><p>${esc(v.err)}</p></div></div>`;
@@ -1466,6 +1466,12 @@ async function pkInvAnswer(gid, yes) {
   if (!yes) { render(); return toast("Got it. No thanks."); }
   toast("You're in " + (pkGroup(gid)?.name || "the group") + ". Make your picks!");
   pkOpen(gid);
+}
+function pkDeleteBox(g) {
+  if (S.pkDel !== g.id) return `<div class="acts"><button class="btn quiet" data-act="pkDelAsk" data-id="${g.id}">Delete this group</button></div>`;
+  return `<div class="cpanel"><span class="lab">Delete ${esc(g.name)}?</span>
+    <span class="sub">This removes the group, its members' picks and any rolled-over pot for everyone, and can't be undone. Points already won in finished weeks stay in Standings. Members get a notification.</span>
+    <div class="acts"><button class="btn primary" data-act="pkDel" data-id="${g.id}">Delete the group</button><button class="btn ghost" data-act="pkDelNo">Keep it</button></div></div>`;
 }
 async function pkCrash(gid) {
   const { error } = await sb.rpc("request_pickem_crash", { p_group: gid });
@@ -2793,6 +2799,14 @@ const ACT = {
   pkCrash: (el) => pkCrash(el.dataset.id),
   pkPeek: (el) => { S.pkPeek = { gid: el.dataset.id, uid: el.dataset.u }; render(); },
   pkPeekClose: () => { S.pkPeek = null; render(); },
+  pkDelAsk: (el) => { S.pkDel = el.dataset.id; render(); },
+  pkDelNo: () => { S.pkDel = null; render(); },
+  pkDel: async (el) => {
+    const g = pkGroup(el.dataset.id), { error } = await sb.rpc("delete_pickem_group", { p_group: el.dataset.id });
+    if (error) return toast(friendly(error));
+    S.pkDel = null; S.pkView = null; await Promise.all([loadPickem(), loadBets()]); render(); window.scrollTo({ top: 0 });
+    toast(`${g ? g.name : "The group"} is deleted. Members will get a heads-up.`);
+  },
   pkAll: (el) => { S.pkAll = { gid: el.dataset.id, diff: false }; render(); },
   pkAllClose: () => { S.pkAll = null; render(); },
   pkGoWeek: (el) => pkOpen(S.pkView.gid, el.dataset.v),

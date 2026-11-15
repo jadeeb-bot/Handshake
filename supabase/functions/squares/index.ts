@@ -286,6 +286,20 @@ Deno.serve(async (req) => {
     sent += await deliver(admin, to, { title: `${p.title}: numbers are in`, body: "Squares are locked and the numbers are drawn. Open Squares to see yours.", tag: `squares-${p.id}` });
   }
 
+  // Pick 'em groups that were deleted, or removed for having fewer than 2 entries by kickoff
+  await admin.rpc("pickem_prune").then(() => {}, () => {});
+  const { data: gone } = await admin.from("pickem_removed").select("*").is("notified_at", null).limit(20);
+  for (const r of gone ?? []) {
+    await admin.from("pickem_removed").update({ notified_at: new Date().toISOString() }).eq("id", r.id);
+    const to = (r.members ?? []).filter((u: string) => u !== r.removed_by);
+    const who = r.removed_by ? (((await admin.from("profiles").select("name:display_name").eq("id", r.removed_by).maybeSingle()).data?.name as string) || "The organizer") : "";
+    sent += await deliver(admin, to, {
+      title: `Pick 'em All!: ${r.group_name} is gone`,
+      body: r.reason === "no entries" ? "It didn't get at least 2 entries by the first Sunday kickoff, so it was removed. Start a new group anytime." : `${who} deleted the group. Points already won still count.`,
+      tag: `pkgone-${r.id}`,
+    });
+  }
+
   // 3. quarter results
   const { data: fresh } = await admin.from("squares_results").select("*").is("notified_at", null);
   for (const r of fresh ?? []) {
