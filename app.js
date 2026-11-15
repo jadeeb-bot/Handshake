@@ -1261,7 +1261,7 @@ function pkCard(g) {
   }
   return `<article class="card pkcard">
     <div class="slip-top"><span class="cat">Pick 'em All!</span><span class="sub">${rows.length} member${rows.length === 1 ? "" : "s"}</span>${modBtn("pickem", g.id, g.created_by)}</div>
-    <h3>${esc(g.name)}</h3>${lastLine}${potLine}${reqRows}${table}${acts}${invite}</article>`;
+    <h3><button class="pkname" data-act="pkAll" data-id="${g.id}" title="See everyone's picks">${esc(g.name)}</button></h3>${lastLine}${potLine}${reqRows}${table}${acts}${invite}</article>`;
 }
 function pkSection() {
   if (!S.pk || S.pk.off) return "";
@@ -1357,7 +1357,7 @@ function renderPickem() {
   const mine = pkIsMember(g.id), cur = nflWeek(Date.now());
   const nav = `<div class="filters"><button class="chipbtn" data-act="pkWeek" data-v="-1">‹ Earlier</button><span class="sub" style="font-weight:600">${esc(weekLabel(v.week))}${v.week === cur ? " (this week)" : ""}</span>${v.week < weekShift(cur, 1) ? `<button class="chipbtn" data-act="pkWeek" data-v="1">Later ›</button>` : ""}</div>`;
   const rolled = S.pk.carry.filter((c) => c.group_id === g.id).length;
-  const head = `<div class="secthead"><h2>${esc(g.name)}</h2><button class="btn quiet" data-act="pkBack">‹ All groups</button></div>
+  const head = `<div class="secthead"><h2><button class="pkname" data-act="pkAll" data-id="${g.id}" title="See everyone's picks">${esc(g.name)}</button></h2><button class="btn quiet" data-act="pkBack">‹ All groups</button></div>
     <span class="lab">Standings</span>${pkStandings(g)}${rolled ? `<div class="pkpot">💰 <b>${rolled * 5} pts rolled over</b> and waiting for this week's winner.</div>` : ""}
     <span class="lab">Results</span>${pkResults(g)}
     <span class="lab">Picks</span>${nav}`;
@@ -2525,6 +2525,41 @@ function renderReports() {
     ${done.length ? `<span class="lab">Handled</span><div class="cards">${done.map(card).join("")}</div>` : ""}</div>`;
 }
 
+/* ---------- Pick 'em: tap the group name to see everyone's picks; "Differences only" hides unanimous games ---------- */
+function pkAllSheet() {
+  const k = S.pkAll; if (!k || !S.pk) return "";
+  const g = pkGroup(k.gid); if (!g) return "";
+  const v = S.pkView && S.pkView.gid === k.gid && S.pkView.games ? S.pkView : null;
+  const week = v ? v.week : nflWeek(Date.now());
+  const games = (v ? v.games : S.pk.weekGames || []).filter((x) => x.home_spread != null).slice().sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at));
+  const picks = v ? v.picks : (S.pk.wkPicks || []).filter((p) => p.group_id === k.gid);
+  const bonus = v ? v.bonus : (S.pk.wkBonus || []).filter((b) => b.group_id === k.gid);
+  const people = pkTotals(k.gid).map((r) => r.uid);
+  const rows = games.map((gm) => {
+    const locked = pkLocked(gm, games), c = coverSide(gm);
+    const cells = people.map((u) => {
+      const p = picks.find((x) => x.game_id === gm.id && x.uid === u);
+      if (!locked && u !== S.me) return { t: "🔒", cls: "hid" };
+      if (!p) return { t: "—", cls: "none" };
+      const res = !c ? "" : c === "push" ? "res-push" : c === p.side ? "res-win" : "res-lose";
+      const star = bonus.some((b) => b.uid === u && b.game_id === gm.id) ? "★" : "";
+      return { t: nick(p.side === "home" ? gm.home : gm.away) + star, cls: res, side: p.side };
+    });
+    const sides = new Set(cells.filter((x) => x.side).map((x) => x.side));
+    return { gm, locked, cells, split: sides.size > 1 };
+  });
+  const shown = k.diff ? rows.filter((r) => r.split) : rows;
+  const head = `<tr><th class="gcol">Game</th>${people.map((u) => `<th>${esc(u === S.me ? "You" : pkName(u))}</th>`).join("")}</tr>`;
+  const body = shown.map((r) => `<tr><td class="gcol"><b>${esc(nick(r.gm.away))}</b> at <b>${esc(nick(r.gm.home))}</b><br><span class="sub mono">${esc(nick(r.gm.home))} ${lineTxt(+r.gm.home_spread)}${r.gm.completed ? ` · F ${r.gm.away_score}-${r.gm.home_score}` : ""}</span></td>${r.cells.map((x) => `<td><span class="allcell ${x.cls}">${esc(x.t)}</span></td>`).join("")}</tr>`).join("");
+  const nSplit = rows.filter((r) => r.split).length, nHidden = rows.filter((r) => !r.locked).length;
+  return `<div class="modsheet" role="dialog" aria-label="Everyone's picks"><div class="card wide">
+    <h3>${esc(g.name)} · everyone's picks</h3>
+    <span class="sub">${esc(weekLabel(week))} · ${games.length} games${nHidden ? ` · 🔒 ${nHidden} not locked yet (only your own picks show)` : ""}</span>
+    <label class="rvpick"><input type="checkbox" id="pkDiff" ${k.diff ? "checked" : ""}> Show differences only <span class="sub">(${nSplit} game${nSplit === 1 ? "" : "s"} where people picked different winners)</span></label>
+    ${shown.length ? `<div class="allwrap"><table class="alltable"><thead>${head}</thead><tbody>${body}</tbody></table></div>` : `<span class="sub">${k.diff ? "Everyone picked the same side on every game so far." : "No games this week."}</span>`}
+    <div class="acts"><button class="btn ghost" data-act="pkAllClose">Close</button></div></div></div>`;
+}
+
 /* ---------- Pick 'em: tap a name to see that person's picks (locked games only) ---------- */
 function pkPeekSheet() {
   const k = S.pkPeek; if (!k || !S.pk) return "";
@@ -2560,7 +2595,7 @@ function render() {
   try { const net = rivals().reduce((t, r) => t + (r.current || 0), 0), q = $("#quantoSub"); if (q) q.textContent = net ? (net > 0 ? "you're owed " + pts(net) : "you owe " + pts(-net)) + " net" : "all square"; } catch (e) {}
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = (S.tab === "reports" ? renderReports() : S.tab === "quanto" ? renderQuanto() : S.tab === "squares" ? renderSquares() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard()) + modSheet() + pkPeekSheet();
+  v.innerHTML = (S.tab === "reports" ? renderReports() : S.tab === "quanto" ? renderQuanto() : S.tab === "squares" ? renderSquares() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard()) + modSheet() + pkPeekSheet() + pkAllSheet();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -2758,6 +2793,8 @@ const ACT = {
   pkCrash: (el) => pkCrash(el.dataset.id),
   pkPeek: (el) => { S.pkPeek = { gid: el.dataset.id, uid: el.dataset.u }; render(); },
   pkPeekClose: () => { S.pkPeek = null; render(); },
+  pkAll: (el) => { S.pkAll = { gid: el.dataset.id, diff: false }; render(); },
+  pkAllClose: () => { S.pkAll = null; render(); },
   pkGoWeek: (el) => pkOpen(S.pkView.gid, el.dataset.v),
   pkInvSend: (el) => pkInvSend(el.dataset.id),
   pkInvAnswer: (el) => pkInvAnswer(el.dataset.id, el.dataset.v === "1"),
@@ -2948,6 +2985,7 @@ document.addEventListener("change", (e) => {
   if (/^wfSel\d$/.test(e.target.id)) { const i = e.target.id.slice(5); wfFormCapture(); render(); const g = $("#wfGuest" + i); if (g && !g.hidden && !g.value) g.focus(); }
   if (/^wfGuest\d$/.test(e.target.id)) { wfFormCapture(); render(); }
   if (e.target.name === "rvWhere") { rvFormCapture(); render(); }
+  if (e.target.id === "pkDiff" && S.pkAll) { S.pkAll.diff = e.target.checked; render(); }
   if (e.target.classList?.contains("sqGame") || e.target.id === "sqSame" || e.target.id === "sqPrice" || e.target.id === "sqWeek") { sqFormCapture(); render(); }
   if (e.target.name === "rvLockOpt") { rvLockCapture(); const L = S.rsvp.lock, d = rvLockDefaults(L.opt); L.people = [...new Set([...d.people, ...L.people])]; L.on = [...new Set([...d.on, ...L.on.filter((u) => !d.people.includes(u))])]; render(); }
 });
@@ -3525,7 +3563,7 @@ setInterval(() => {
 /* ---------- Take it to the Top: a floating button once you've scrolled down ---------- */
 {
   const btn = $("#toTop");
-  const update = () => { btn.hidden = window.scrollY < 500 || !!S.mod || !!S.pkPeek; };
+  const update = () => { btn.hidden = window.scrollY < 500 || !!S.mod || !!S.pkPeek || !!S.pkAll; };
   window.addEventListener("scroll", update, { passive: true });
   btn.addEventListener("click", () => {
     const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
