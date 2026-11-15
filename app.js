@@ -2049,13 +2049,194 @@ async function ctAct(fn, args, note, notify) {
   await Promise.all([loadContests(), notify ? loadBets() : null]); render();
 }
 
+/* ---------- Squares ---------- */
+const SQ_Q = ["Q1", "Q2", "Q3", "Final"];
+async function loadSquares() {
+  const { data, error } = await sb.from("squares_pools").select("*").neq("status", "canceled").order("created_at", { ascending: false }).limit(40);
+  if (error) { S.sq = { ...(S.sq || {}), off: true, list: [] }; return; }
+  const ids = (data || []).map((p) => p.id), q = (t, col = "pool_id") => (ids.length ? sb.from(t).select("*").in(col, ids) : { data: [] });
+  const [g, cl, inv, cr, pd, rs] = await Promise.all([q("squares_games"), q("squares_claims"), q("squares_invitees"), q("squares_crash"), q("squares_paid"), q("squares_results")]);
+  const gids = [...new Set((g.data || []).map((x) => x.game_id))];
+  const ln = gids.length ? await sb.from("vegas_lines").select("*").in("id", gids) : { data: [] };
+  S.sq = { ...(S.sq || {}), off: false, list: data || [], games: (g.data || []).sort((a, b) => a.ord - b.ord), claims: cl.data || [], invitees: inv.data || [],
+    crash: cr.data || [], paid: pd.data || [], results: rs.data || [], lines: new Map((ln.data || []).map((x) => [x.id, x])) };
+}
+const sqGet = (id) => (S.sq?.list || []).find((p) => p.id === id);
+const sqOf = (key, id) => (S.sq?.[key] || []).filter((x) => x.pool_id === id);
+const sqMember = (p, u = S.me) => p.originator === u || sqOf("invitees", p.id).some((x) => x.uid === u);
+const sqStatus = (p) => ({ open: `${sqOf("claims", p.id).length} of 100 squares taken`, drawn: "Numbers drawn · game on", done: "All done" }[p.status] || "");
+function sqPayLine(p) {
+  const gs = sqOf("games", p.id), pot = 100 * p.price;
+  return gs.map((g) => { const l = S.sq.lines.get(g.game_id);
+    return `${gs.length > 1 ? `<b>${esc(nick(l?.away))} at ${esc(nick(l?.home))}</b>: ` : ""}${g.pct.map((x, i) => `${SQ_Q[i]} ${Math.round(pot * x / 100)}`).join(" · ")}`; }).join("<br>");
+}
+function renderSquares() {
+  if (!S.sq) { loadSquares().then(render).catch(() => {}); return `<div class="empty"><p>Loading…</p></div>`; }
+  if (S.sq.off) return `<div class="empty"><h3>Squares aren't switched on yet</h3><p>Run update-squares.sql in Supabase.</p></div>`;
+  if (S.sq.view) return renderSquaresPool();
+  let form = "";
+  if (S.sq.form) {
+    const f = S.sq.form, games = (S.lines || []).filter((g) => Date.parse(g.starts_at) > Date.now());
+    if (S.lines === null) loadLines();
+    const chosen = games.filter((g) => f.games.includes(g.id)), many = chosen.length > 1;
+    const pctRow = (key, vals) => `<div class="sqpct">${SQ_Q.map((q, i) => `<label>${q}<input class="sqPct" data-k="${key}" data-i="${i}" type="number" inputmode="decimal" min="0" max="100" value="${esc(vals[i])}"></label>`).join("")}</div>`;
+    const total = sqFormPct(f).reduce((t, g) => t + g.pct.reduce((a, b) => a + b, 0), 0);
+    form = `<div class="card wfstart">
+      <div class="field"><label for="sqTitle">Name the pool</label><input id="sqTitle" maxlength="60" placeholder="Sunday squares" value="${esc(f.title)}" autocomplete="off"></div>
+      <div class="field"><label for="sqPrice">Points per square</label><input id="sqPrice" type="number" inputmode="numeric" min="1" max="1000" value="${esc(f.price)}"></div>
+      <span class="lab">Games</span>
+      ${games.length ? `<div class="sqgames">${games.map((g) => `<label><input type="checkbox" class="sqGame" value="${esc(g.id)}" ${f.games.includes(g.id) ? "checked" : ""}> ${esc(nick(g.away))} at ${esc(nick(g.home))} <span class="sub">${esc(new Date(g.starts_at).toLocaleDateString("en-US", { weekday: "short" }))} ${esc(kickoff(g))}</span></label>`).join("")}</div>` : `<span class="sub">${S.lines === null ? "Loading games…" : "No upcoming games on the Vegas list yet."}</span>`}
+      <span class="lab">Payouts (percent of the pot: ${100 * (parseInt(f.price, 10) || 0)} pts)</span>
+      ${many ? `<label class="rvpick"><input type="checkbox" id="sqSame" ${f.same ? "checked" : ""}> Same for all games <span class="sub">(the pot splits evenly across games)</span></label>` : ""}
+      ${!many || f.same ? pctRow("all", f.pct.all) : chosen.map((g) => `<span class="sub"><b>${esc(nick(g.away))} at ${esc(nick(g.home))}</b></span>${pctRow(g.id, f.pct[g.id] || ["", "", "", ""])}`).join("")}
+      <span id="sqTotal" class="sub ${Math.abs(total - 100) < 0.11 ? "" : "sqbad"}">Adds up to ${+total.toFixed(2)}%${Math.abs(total - 100) < 0.11 ? "" : " (needs to be 100%)"}</span>
+      <span class="lab">Invite</span>
+      <div class="rvpeople">${S.people.filter((p) => p.id !== S.me).map((p) => `<label><input type="checkbox" class="sqInv" value="${p.id}" ${f.inv.includes(p.id) ? "checked" : ""}> ${esc(p.name)}</label>`).join("")}</div>
+      <span class="sub">Anyone else can ask to crash, and you decide.</span>
+      <p class="err" id="sqErr" hidden></p>
+      <div class="acts"><button class="btn primary" data-act="sqCreate">Start the pool</button><button class="btn ghost" data-act="sqCancelForm">Cancel</button></div></div>`;
+  }
+  const cards = S.sq.list.map((p) => {
+    const gs = sqOf("games", p.id).map((g) => S.sq.lines.get(g.game_id)).filter(Boolean);
+    return `<article class="card wfround" data-act="sqOpen" data-id="${p.id}"><div class="slip-top"><span class="cat">Squares</span><span class="sub">${p.originator === S.me ? "Your pool" : "From " + esc(personName(p.originator) || "a friend")} · ${p.price} pts a square</span></div>
+      <h3>${esc(p.title)}</h3><span class="sub">${esc(gs.map((g) => nick(g.away) + " at " + nick(g.home)).join(", "))} · ${sqStatus(p)}</span></article>`;
+  }).join("");
+  return `<div style="display:flex;flex-direction:column;gap:14px">
+    <div class="secthead"><h2>Squares</h2>${S.sq.form ? "" : `<button class="btn quiet" data-act="sqNew">Start a pool</button>`}</div>
+    <span class="sub">A 10×10 grid on an NFL game. Claim squares; when they're gone, numbers 0–9 are drawn for each team. After each quarter, the square matching the last digit of each team's score wins.</span>
+    ${form}${cards ? `<div class="cards">${cards}</div>` : S.sq.form ? "" : `<div class="empty"><p>No pools yet.</p></div>`}</div>`;
+}
+// The form's payouts as [{game_id, pct[4]}] (percent of the whole pot)
+function sqFormPct(f) {
+  const n = (v) => parseFloat(v) || 0, ids = f.games;
+  if (!ids.length) return [{ game_id: null, pct: f.pct.all.map(n) }];
+  if (ids.length === 1 || f.same) return ids.map((id) => ({ game_id: id, pct: f.pct.all.map((x) => Math.round((n(x) / ids.length) * 100) / 100) }));
+  return ids.map((id) => ({ game_id: id, pct: (f.pct[id] || []).map(n).concat([0, 0, 0, 0]).slice(0, 4) }));
+}
+function sqFormCapture() {
+  const f = S.sq?.form; if (!f || !$("#sqTitle")) return;
+  f.title = $("#sqTitle").value; f.price = $("#sqPrice").value; f.games = checked(".sqGame"); f.inv = checked(".sqInv");
+  if ($("#sqSame")) f.same = $("#sqSame").checked;
+  document.querySelectorAll(".sqPct").forEach((x) => { const k = x.dataset.k; (f.pct[k] = f.pct[k] || ["", "", "", ""])[+x.dataset.i] = x.value; });
+}
+async function sqCreate() {
+  sqFormCapture();
+  const f = S.sq.form, err = (m) => { const x = $("#sqErr"); if (x) { x.textContent = m; x.hidden = false; } };
+  if (!f.games.length) return err("Pick at least one game.");
+  const games = sqFormPct(f);
+  // keep it exactly 100: put any rounding leftover on the last game's final
+  const tot = games.reduce((t, g) => t + g.pct.reduce((a, b) => a + b, 0), 0);
+  if (Math.abs(tot - 100) < 0.11) games[games.length - 1].pct[3] = Math.round((games[games.length - 1].pct[3] + 100 - tot) * 100) / 100;
+  const { data, error } = await sb.rpc("create_squares", { p_title: f.title.trim(), p_price: parseInt(f.price, 10), p_games: games, p_invitees: f.inv });
+  if (error) return err(friendly(error));
+  notifyQuiet({ squares_pool: data, kind: "new" });
+  S.sq.form = null; await loadSquares(); sqOpen(data); toast("Pool started. Pick your squares.");
+}
+function sqOpen(id) {
+  S.sq.view = { id, game: 0 }; S.sq.sel = []; S.sq.buyin = null; S.sq.fix = null; render();
+  liveSub("squares", [["squares_claims", "pool_id=eq." + id], ["squares_pools", "id=eq." + id], ["squares_results", "pool_id=eq." + id], ["squares_crash", "pool_id=eq." + id]],
+    async () => { if (S.tab === "squares" && S.sq?.view?.id === id) { await loadSquares(); render(); } });
+}
+const sqWho = (u) => (u === S.me ? "You" : personName(u) || "Someone");
+const sqFirst = (u) => (u === S.me ? "You" : String(personName(u) || "?").split(/\s+/)[0]);
+function renderSquaresPool() {
+  const p = sqGet(S.sq.view.id), head = (t) => `<div class="secthead"><h2>${esc(t)}</h2><button class="btn quiet" data-act="sqBack">‹ All pools</button></div>`;
+  if (!p) { S.sq.view = null; return renderSquares(); }
+  const isOrig = p.originator === S.me, member = sqMember(p), open = p.status === "open";
+  const claims = sqOf("claims", p.id), byNum = new Map(claims.map((c) => [c.square, c])), sel = S.sq.sel || [];
+  const games = sqOf("games", p.id), gi = Math.min(S.sq.view.game || 0, games.length - 1), g = games[gi], line = g && S.sq.lines.get(g.game_id);
+  const results = sqOf("results", p.id), wins = new Map();
+  for (const r of results) wins.set(r.square, (wins.get(r.square) || 0) + r.points);
+  const drawn = !!p.digits_home;
+  let out = `<div class="sub">${isOrig ? "Your pool" : "Started by " + esc(sqWho(p.originator))} · <b>${p.price} pts</b> a square · pot <b>${100 * p.price}</b></div>
+    <div class="wfstakes"><span>${sqStatus(p)}</span><span>${sqPayLine(p)}</span></div>`;
+  // crashing
+  if (!member && open) {
+    const r = sqOf("crash", p.id).find((x) => x.uid === S.me);
+    out += r?.status === "pending" ? `<span class="sub">You asked to crash. Waiting on ${esc(sqWho(p.originator))}.</span>`
+      : r?.status === "declined" ? `<span class="sub">${esc(sqWho(p.originator))} said not this time.</span>`
+      : `<div class="acts"><button class="btn primary" data-act="sqCrash">Can I crash?</button></div>`;
+  }
+  if (isOrig) for (const r of sqOf("crash", p.id).filter((x) => x.status === "pending"))
+    out += `<div class="rvvenue"><span><b>${esc(sqWho(r.uid))}</b> asks: can I crash?</span><span class="acts"><button class="btn primary" data-act="sqAnswer" data-id="${r.uid}" data-v="1">Let them in</button><button class="btn ghost" data-act="sqAnswer" data-id="${r.uid}" data-v="0">No</button></span></div>`;
+  // game picker (the grid is the same for every game; the labels follow the game)
+  if (games.length > 1) out += `<div class="sqtabs">${games.map((x, i) => { const l = S.sq.lines.get(x.game_id); return `<button class="btn ${i === gi ? "" : "ghost"}" data-act="sqGame" data-v="${i}">${esc(nick(l?.away))} at ${esc(nick(l?.home))}</button>`; }).join("")}</div>`;
+  // the grid
+  const dH = (c) => (drawn ? p.digits_home[c] : "?"), dA = (r) => (drawn ? p.digits_away[r] : "?");
+  let grid = `<div class="sqcorner"></div>`;
+  for (let c = 0; c < 10; c++) grid += `<div class="sqdig">${dH(c)}</div>`;
+  for (let r = 0; r < 10; r++) {
+    grid += `<div class="sqdig">${dA(r)}</div>`;
+    for (let c = 0; c < 10; c++) {
+      const n = r * 10 + c + 1, cl = byNum.get(n), mine = cl?.uid === S.me, picked = sel.includes(n), w = wins.get(n);
+      const tap = open && member && (!cl || mine);
+      grid += `<${tap ? `button data-act="sqCell" data-v="${n}"` : "div"} class="sqcell${cl ? " taken" : ""}${mine ? " mine" : ""}${picked ? " picked" : ""}${w ? " won" : ""}" aria-label="Square ${n}${cl ? ", " + esc(sqWho(cl.uid)) : ", open"}">
+        <span class="sqn">${n}</span><span class="sqname">${cl ? esc(cl.unsold ? "—" : sqFirst(cl.uid)) : ""}</span>${w ? `<span class="sqw">🏆</span>` : ""}</${tap ? "button" : "div"}>`;
+    }
+  }
+  out += `<div class="sqboard"><div class="sqhome">${esc(line ? line.home : "Home")} →</div><div class="sqmid"><div class="sqaway">${esc(line ? line.away : "Visitors")} ↓</div><div class="sqgrid">${grid}</div></div></div>`;
+  // claim / release bar
+  if (open && member) {
+    const toClaim = sel.filter((n) => !byNum.get(n)), toFree = sel.filter((n) => byNum.get(n)?.uid === S.me), mineN = claims.filter((c) => c.uid === S.me).length;
+    out += `<div class="sqbar"><span class="sub">You have <b>${mineN}</b> square${mineN === 1 ? "" : "s"} (${mineN * p.price} pts). ${100 - claims.length} open. Tap open squares to pick them.</span>
+      <div class="acts">${toClaim.length ? `<button class="btn primary" data-act="sqClaim">Claim ${toClaim.length} square${toClaim.length === 1 ? "" : "s"} (${toClaim.length * p.price} pts)</button>` : ""}${toFree.length ? `<button class="btn ghost" data-act="sqRelease">Give back ${toFree.length}</button>` : ""}${sel.length ? `<button class="btn quiet" data-act="sqClear">Clear</button>` : ""}</div></div>`;
+  }
+  if (open && isOrig) out += S.sq.drawArm
+    ? `<div class="cpanel"><span class="lab">Draw the numbers now?</span><span class="sub">Squares close. The ${100 - claims.length} open square${100 - claims.length === 1 ? "" : "s"} become yours. (Numbers draw on their own when the last square is taken, or at kickoff.)</span><div class="acts"><button class="btn primary" data-act="sqDraw">Draw numbers</button><button class="btn ghost" data-act="sqDrawNo">Not yet</button></div></div>`
+    : `<div class="acts"><button class="btn" data-act="sqDrawAsk">Draw numbers now</button><button class="btn quiet" data-act="sqCancelPool">Cancel pool</button></div>`;
+  // results
+  if (drawn) {
+    out += `<span class="lab">Results</span>`;
+    for (const x of games) {
+      const l = S.sq.lines.get(x.game_id), rs = results.filter((r) => r.game_id === x.game_id), started = l && Date.parse(l.starts_at) <= Date.now();
+      out += `<div class="sqres"><b>${esc(nick(l?.away))} at ${esc(nick(l?.home))}</b>${SQ_Q.map((q, i) => {
+        const r = rs.find((y) => y.quarter === i + 1), fixing = S.sq.fix && S.sq.fix.g === x.game_id && S.sq.fix.q === i + 1;
+        if (fixing) return `<div class="sqrow"><span>${q}</span><span class="sqfix"><input id="sqFixA" type="number" inputmode="numeric" min="0" placeholder="${esc(nick(l?.away))}" value="${r ? r.away : ""}"><input id="sqFixH" type="number" inputmode="numeric" min="0" placeholder="${esc(nick(l?.home))}" value="${r ? r.home : ""}"><button class="btn primary" data-act="sqFixSave">Save</button><button class="btn ghost" data-act="sqFixNo">×</button></span></div>`;
+        const fix = isOrig && started ? `<button class="btn quiet" data-act="sqFix" data-id="${esc(x.game_id)}" data-v="${i + 1}">${r ? "Fix" : "Enter"}</button>` : "";
+        return `<div class="sqrow"><span>${q} <span class="sub">${Math.round(100 * p.price * x.pct[i] / 100)} pts</span></span><span>${r ? `${esc(nick(l?.away))} ${r.away}, ${esc(nick(l?.home))} ${r.home} · #${r.square} <b>${esc(r.uid ? sqWho(r.uid) : "Nobody")}</b> +${r.points}${r.source === "manual" ? " <span class=\"sub\">(fixed)</span>" : ""}` : `<span class="sub">${started ? "waiting" : "not started"}</span>`}</span>${fix}</div>`;
+      }).join("")}</div>`;
+    }
+    const tot = new Map(); for (const r of results) if (r.uid) tot.set(r.uid, (tot.get(r.uid) || 0) + r.points);
+    if (tot.size) out += `<span class="sub">Winnings so far: ${[...tot].sort((a, b) => b[1] - a[1]).map(([u, n]) => `${esc(sqWho(u))} ${n}`).join(" · ")}. Tracked here only; nothing goes into Standings.</span>`;
+  }
+  // participants and buy-ins
+  const people = new Map(); for (const c of claims) if (!c.unsold) people.set(c.uid, (people.get(c.uid) || 0) + 1);
+  for (const x of sqOf("invitees", p.id)) if (!people.has(x.uid)) people.set(x.uid, 0);
+  const paid = new Set(sqOf("paid", p.id).map((x) => x.uid));
+  out += `<span class="lab">Players</span>` + [...people].sort((a, b) => b[1] - a[1]).map(([u, n]) => {
+    const owe = n * p.price, isPaid = paid.has(u) || u === p.originator;
+    const btn = isOrig && u !== S.me && n ? (isPaid ? `<button class="btn quiet" data-act="sqPaid" data-id="${u}" data-v="0">Paid ✓</button>` : `<button class="btn ghost" data-act="sqBuyin" data-id="${u}">Collect Buy-In</button>`) : "";
+    const row = `<div class="rvvenue"><span><b>${esc(sqWho(u))}</b> <span class="sub">${n} square${n === 1 ? "" : "s"}${n ? ` · ${owe} pts` : ""}${n && u !== p.originator && (isOrig || u === S.me) ? (isPaid ? " · paid" : " · not paid yet") : ""}</span></span>${btn}</div>`;
+    return row + (S.sq.buyin === u ? sqBuyinPanel(p, u, n) : "");
+  }).join("");
+  return `<div style="display:flex;flex-direction:column;gap:14px">${head(p.title)}${out}</div>`;
+}
+function sqBuyinPanel(p, u, n) {
+  const name = sqWho(u), owe = n * p.price, mine = S.myVenmo;
+  const text = hs(`Buy-in time for ${p.title}: you have ${n} square${n === 1 ? "" : "s"} at ${p.price} pts each, so you owe ${owe} pts.${mine ? ` Venmo: @${mine}.` : ""} Good luck!`);
+  const num = phoneForUid(u) || store.get(phoneKey(name)) || "", theirs = S.rivalVenmo?.get(u);
+  return `<div class="cpanel settledone"><span class="lab">Collect ${owe} pts from ${esc(name)}</span><p class="msg">${esc(text)}</p>
+    <div class="acts"><button class="btn primary" data-act="sqBuyinCopy" data-id="${u}">Copy</button><a class="btn" href="${esc(smsHref(num, text))}">Open Messages</a>
+    <a class="btn" href="${esc(venmoLink("request", theirs, p.title + " squares buy-in"))}">Request on Venmo${theirs ? " from @" + esc(theirs) : ""}</a></div>
+    <div class="acts"><button class="btn primary" data-act="sqPaid" data-id="${u}" data-v="1">Mark paid</button><button class="btn ghost" data-act="sqBuyinNo">Close</button></div>
+    <span class="sub">Venmo opens with ${theirs ? "@" + esc(theirs) + " and " : ""}a note filled in; type the amount and tap Request.</span></div>`;
+}
+async function sqAct(fn, args, note, kind, extra) {
+  const { data, error } = await sb.rpc(fn, args);
+  if (error) { toast(friendly(error)); await loadSquares(); render(); return null; }
+  if (kind) notifyQuiet({ squares_pool: S.sq.view.id, kind, ...(extra || {}) });
+  if (note) toast(typeof note === "function" ? note(data) : note);
+  await loadSquares(); render();
+  return data ?? true;
+}
+
 function render() {
   renderLedger(); renderBell();
-  for (const t of ["board", "feed", "rivals", "vegas", "golf", "rsvp", "contest", "quanto"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
+  for (const t of ["board", "feed", "rivals", "vegas", "golf", "rsvp", "contest", "squares", "quanto"]) $("#tab-" + t).setAttribute("aria-selected", S.tab === t);
   try { const net = rivals().reduce((t, r) => t + (r.current || 0), 0), q = $("#quantoSub"); if (q) q.textContent = net ? (net > 0 ? "you're owed " + pts(net) : "you owe " + pts(-net)) + " net" : "all square"; } catch (e) {}
   const v = $("#view");
   if (!S.loaded) { v.innerHTML = `<div class="empty"><h3>Opening the notebook…</h3><p>Pulling up every prediction on the board.</p></div>`; return; }
-  v.innerHTML = S.tab === "quanto" ? renderQuanto() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
+  v.innerHTML = S.tab === "quanto" ? renderQuanto() : S.tab === "squares" ? renderSquares() : S.tab === "rsvp" ? renderRsvp() : S.tab === "contest" ? renderContests() : S.tab === "golf" ? renderGolf() : S.tab === "feed" && S.pkView ? renderPickem() : S.tab === "vegas" ? renderVegas() : S.tab === "rivals" ? renderRivals() : S.tab === "feed" ? renderFeed() : renderBoard();
   const sel = $("#sortSel"); if (sel) sel.onchange = (e) => { S.sort = e.target.value; store.set("hs-sort", S.sort); render(); };
   S.fresh = null;
 }
@@ -2099,7 +2280,7 @@ async function copy(text, ok) {
 
 const byId = (id) => S.bets.find((b) => b.id === id);
 const ACT = {
-  tab: (el) => { if (el.dataset.v === "board") loadContests().then(render).catch(() => {}); if (el.dataset.v === "quanto" || el.dataset.v === "rivals") loadVenmo().then(render).catch(() => {}); if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
+  tab: (el) => { if (el.dataset.v === "board") loadContests().then(render).catch(() => {}); if (el.dataset.v === "quanto" || el.dataset.v === "rivals") loadVenmo().then(render).catch(() => {}); if (el.dataset.v !== "rsvp") liveUnsub("rsvp"); if (el.dataset.v !== "contest") liveUnsub("contest"); if (el.dataset.v !== "squares") liveUnsub("squares"); if (el.dataset.v === "squares" && S.sq) { S.sq.view = null; loadSquares().then(render).catch(() => {}); } if (el.dataset.v === "squares" && S.lines == null) loadLines(); if (el.dataset.v === "rsvp" && S.rsvp) { S.rsvp.view = null; loadRsvp().then(render).catch(() => {}); } if (el.dataset.v === "contest" && S.ct) { S.ct.view = null; loadContests().then(render).catch(() => {}); } if (el.dataset.v !== "golf") wfUnsub(); else if (S.wolf?.view && !wfChan) wfSub(S.wolf.view.id); S.tab = el.dataset.v; S.picking = null; S.notify = null; S.pkView = null; if (S.tab === "feed") loadPickem().then(render).catch(() => {}); if (S.tab === "vegas" && S.lines && !S.linesErr) loadLines(); render(); },
   vegasPick: (el) => vegasPick(el.dataset.id, el.dataset.v),
   pkGo: () => { S.tab = "feed"; S.pkView = null; render(); window.scrollTo({ top: 0, behavior: "smooth" }); },
   pkName: () => { S.pkNaming = true; render(); setTimeout(() => $("#pkName")?.focus(), 30); },
@@ -2139,6 +2320,35 @@ const ACT = {
   rvCancelEvent: () => { if (S.rsvp.cancelArm !== S.rsvp.view.id) { S.rsvp.cancelArm = S.rsvp.view.id; return toast("Tap Cancel event again to call it off."); } S.rsvp.cancelArm = null; rvAct("rsvp_cancel", { p_event: S.rsvp.view.id }, "Event canceled."); },
   ctNew: () => { const d = new Date(Date.now() + 7 * DAY); d.setMinutes(0, 0, 0); S.ct.form = { title: "", choices: "", writeins: false, points: "5", max: "1", deadline: exactInput(d.getTime()), vis: "invited", inv: [] }; render(); },
   ctCancelForm: () => { S.ct.form = null; render(); },
+  sqNew: () => { S.sq.form = { title: "", price: "5", games: [], same: true, pct: { all: ["20", "20", "20", "40"] }, inv: [] }; if (!S.lines) loadLines(); render(); },
+  sqCancelForm: () => { S.sq.form = null; render(); },
+  sqCreate: () => sqCreate(),
+  sqOpen: (el) => sqOpen(el.dataset.id),
+  sqBack: () => { liveUnsub("squares"); S.sq.view = null; S.sq.drawArm = false; loadSquares().then(render); render(); },
+  sqGame: (el) => { S.sq.view.game = +el.dataset.v; render(); },
+  sqCell: (el) => { const n = +el.dataset.v, s = S.sq.sel || (S.sq.sel = []); const i = s.indexOf(n); i >= 0 ? s.splice(i, 1) : s.push(n); render(); },
+  sqClear: () => { S.sq.sel = []; render(); },
+  sqClaim: async () => { const p = sqGet(S.sq.view.id), taken = new Set(sqOf("claims", p.id).map((c) => c.square)), want = S.sq.sel.filter((n) => !taken.has(n));
+    const ok = await sqAct("squares_claim", { p_pool: p.id, p_squares: want }, (n) => (typeof n === "number" ? `Claimed. You have ${n} square${n === 1 ? "" : "s"}.` : "Claimed."));
+    if (ok) S.sq.sel = S.sq.sel.filter((n) => !want.includes(n)); render(); },
+  sqRelease: async () => { const p = sqGet(S.sq.view.id), mine = sqOf("claims", p.id).filter((c) => c.uid === S.me).map((c) => c.square), give = S.sq.sel.filter((n) => mine.includes(n));
+    if (await sqAct("squares_release", { p_pool: p.id, p_squares: give }, "Squares given back.")) { S.sq.sel = S.sq.sel.filter((n) => !give.includes(n)); render(); } },
+  sqCrash: () => sqAct("squares_request_crash", { p_pool: S.sq.view.id }, "Asked. You'll hear back.", "crash"),
+  sqAnswer: (el) => sqAct("squares_answer_crash", { p_pool: S.sq.view.id, p_uid: el.dataset.id, p_accept: el.dataset.v === "1" }, el.dataset.v === "1" ? "They're in." : "Got it.", "answer", { uid: el.dataset.id }),
+  sqDrawAsk: () => { S.sq.drawArm = true; render(); },
+  sqDrawNo: () => { S.sq.drawArm = false; render(); },
+  sqDraw: async () => { S.sq.drawArm = false; await sqAct("squares_draw", { p_pool: S.sq.view.id }, "Numbers drawn. Everyone gets a heads-up."); },
+  sqCancelPool: () => { if (S.sq.cancelArm !== S.sq.view.id) { S.sq.cancelArm = S.sq.view.id; return toast("Tap Cancel pool again to call it off."); } S.sq.cancelArm = null;
+    sqAct("squares_cancel", { p_pool: S.sq.view.id }, "Pool canceled.").then((ok) => { if (ok) { liveUnsub("squares"); S.sq.view = null; render(); } }); },
+  sqBuyin: (el) => { S.sq.buyin = el.dataset.id; if (!S.rivalVenmo) loadVenmo().then(render).catch(() => {}); render(); },
+  sqBuyinNo: () => { S.sq.buyin = null; render(); },
+  sqBuyinCopy: () => { const t = document.querySelector(".settledone .msg"); copy(t ? t.textContent : "", "Copied. Paste it into a text."); },
+  sqPaid: async (el) => { if (await sqAct("squares_mark_paid", { p_pool: S.sq.view.id, p_uid: el.dataset.id, p_paid: el.dataset.v === "1" }, el.dataset.v === "1" ? "Marked paid." : "Marked not paid.")) { S.sq.buyin = null; render(); } },
+  sqFix: (el) => { S.sq.fix = { g: el.dataset.id, q: +el.dataset.v }; render(); setTimeout(() => $("#sqFixA")?.focus(), 30); },
+  sqFixNo: () => { S.sq.fix = null; render(); },
+  sqFixSave: async () => { const f = S.sq.fix, a = parseInt($("#sqFixA").value, 10), h = parseInt($("#sqFixH").value, 10);
+    if (isNaN(a) || isNaN(h)) return toast("Enter both scores.");
+    if (await sqAct("squares_set_quarter", { p_pool: S.sq.view.id, p_game: f.g, p_q: f.q, p_home: h, p_away: a }, "Saved. Everyone gets the update.")) { S.sq.fix = null; render(); } },
   ctCreate: () => ctCreate(),
   ctOpen: (el) => ctOpen(el.dataset.id),
   ctFromMine: (el) => { liveUnsub("rsvp"); wfUnsub(); S.tab = "contest"; ctOpen(el.dataset.id); window.scrollTo({ top: $("#view").offsetTop - 10, behavior: "smooth" }); },
@@ -2364,6 +2574,8 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "cText") S.counterDraft.text = e.target.value;
   if (e.target.id === "proofLink") S.proofDraft.link = e.target.value;
   if (e.target.id === "objText") S.objDraft = e.target.value;
+  if (e.target.classList?.contains("sqPct")) { sqFormCapture(); const t = sqFormPct(S.sq.form).reduce((a, g) => a + g.pct.reduce((x, y) => x + y, 0), 0), el = $("#sqTotal"), ok = Math.abs(t - 100) < 0.11;
+    if (el) { el.textContent = `Adds up to ${+t.toFixed(2)}%` + (ok ? "" : " (needs to be 100%)"); el.classList.toggle("sqbad", !ok); } }
   if (e.target.id === "nPhone") {
     const n = e.target.value.replace(/[^\d+]/g, "");
     store.set(phoneKey(e.target.dataset.name), n);
@@ -2376,6 +2588,7 @@ document.addEventListener("change", (e) => {
   if (/^wfSel\d$/.test(e.target.id)) { const i = e.target.id.slice(5); wfFormCapture(); render(); const g = $("#wfGuest" + i); if (g && !g.hidden && !g.value) g.focus(); }
   if (/^wfGuest\d$/.test(e.target.id)) { wfFormCapture(); render(); }
   if (e.target.name === "rvWhere") { rvFormCapture(); render(); }
+  if (e.target.classList?.contains("sqGame") || e.target.id === "sqSame" || e.target.id === "sqPrice") { sqFormCapture(); render(); }
   if (e.target.name === "rvLockOpt") { rvLockCapture(); const L = S.rsvp.lock, d = rvLockDefaults(L.opt); L.people = [...new Set([...d.people, ...L.people])]; L.on = [...new Set([...d.on, ...L.on.filter((u) => !d.people.includes(u))])]; render(); }
 });
 document.addEventListener("click", (e) => {

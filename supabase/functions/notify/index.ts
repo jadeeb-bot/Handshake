@@ -371,6 +371,37 @@ async function contestNote(admin: Admin, caller: string, body: { contest_id?: st
   return reply(200, { sent });
 }
 
+/* ---------- Squares (quarter results come from the squares function) ---------- */
+async function squaresNote(admin: Admin, caller: string, body: { squares_pool?: string; kind?: string; uid?: string }) {
+  if (!isId(body.squares_pool)) return reply(400, { error: "squares_pool is wrong." });
+  const id = body.squares_pool;
+  const { data: p } = await admin.from("squares_pools").select("*").eq("id", id).maybeSingle();
+  if (!p) return reply(404, { error: "That pool no longer exists." });
+  const nameOf = async (u: string) => ((await admin.from("profiles").select("name").eq("id", u).maybeSingle()).data?.name as string) || "Someone";
+  const tag = "squares-" + id;
+  if (body.kind === "new") {
+    if (caller !== p.originator || !recent(p.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const inv = ((await admin.from("squares_invitees").select("uid").eq("pool_id", id)).data || []).map((x: { uid: string }) => x.uid);
+    const sent = await deliver(admin, inv, { title: "Squares: " + p.title,
+      body: `${await nameOf(caller)} started a squares pool: ${p.price} pts a square. Open the Squares tab to pick yours.`, tag });
+    return reply(200, { sent });
+  }
+  if (body.kind === "crash") {
+    const { data: r } = await admin.from("squares_crash").select("*").eq("pool_id", id).eq("uid", caller).maybeSingle();
+    if (!r || r.status !== "pending" || !recent(r.created_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const sent = await deliver(admin, [p.originator], { title: "Squares: " + p.title, body: `${await nameOf(caller)} asks: can I crash? Open Squares to let them in.`, tag });
+    return reply(200, { sent });
+  }
+  if (body.kind === "answer" && caller === p.originator && isId(body.uid)) {
+    const { data: r } = await admin.from("squares_crash").select("*").eq("pool_id", id).eq("uid", body.uid).maybeSingle();
+    if (!r || r.status === "pending" || !recent(r.answered_at)) return reply(200, { sent: 0, reason: "nothing new" });
+    const sent = await deliver(admin, [body.uid!], { title: "Squares: " + p.title,
+      body: r.status === "accepted" ? "You're in. Open Squares to pick your squares." : "Not this time.", tag });
+    return reply(200, { sent });
+  }
+  return reply(200, { sent: 0, reason: "nothing new" });
+}
+
 /* ---------- the request ---------- */
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -384,13 +415,14 @@ Deno.serve(async (req) => {
   const caller = who.user.id;
   console.log("notify: from", caller, "key type", SERVICE_KEY.startsWith("sb_secret_") ? "secret" : SERVICE_KEY.startsWith("eyJ") ? "legacy service_role" : "unknown");
 
-  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string; rsvp_event?: string; contest_id?: string; kind?: string } = {};
+  let body: { prediction_id?: string; auto?: boolean; settlement_request_id?: string; settlement_id?: string; pickem_group?: string; uid?: string; wolf_round?: string; wolf_delete?: string; asker?: string; rsvp_event?: string; contest_id?: string; kind?: string; squares_pool?: string } = {};
   try { body = (await req.json()) ?? {}; } catch (_) { /* empty body */ }
   if (body.settlement_request_id || body.settlement_id) return await settleNote(admin, caller, body);
   if (body.pickem_group) return await crashNote(admin, caller, body);
   if (body.wolf_round) return await wolfNote(admin, caller, body);
   if (body.rsvp_event) return await rsvpNote(admin, caller, body);
   if (body.contest_id) return await contestNote(admin, caller, body);
+  if (body.squares_pool) return await squaresNote(admin, caller, body);
   const predictionId = String(body.prediction_id ?? "");
   if (!/^[0-9a-f-]{36}$/i.test(predictionId)) return reply(400, { error: "prediction_id is required." });
 

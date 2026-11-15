@@ -1,0 +1,219 @@
+// Handshake Squares: the background job for Squares pools.
+// Called every 5 minutes by the pg_cron job "handshake-squares". Deploy with "Verify JWT" OFF
+// so the cron job can call it without a key. Each run:
+//   1. draws the numbers for any open pool whose first game has kicked off
+//      (unsold squares go to the originator) and tells everyone in the pool;
+//   2. for games in progress, reads ESPN's public NFL scoreboard and records the score at the
+//      end of each quarter (Q4 = final, overtime included) with the winning square;
+//   3. notifies everyone in the pool of each new (or fixed) quarter result, once.
+// It returns right away when no pool needs anything, so most runs make no outside calls.
+//
+// Secrets: the same push secrets as notify (VAPID_PRIVATE_KEY, APNS_KEY_ID, APNS_TEAM_ID,
+// APNS_PRIVATE_KEY). Supabase shares secrets across functions, so nothing new to add.
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically.
+import { createClient } from "npm:@supabase/supabase-js@2.118.0";
+import webpush from "npm:web-push@3.6.7";
+
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const VAPID_PUBLIC = Deno.env.get("VAPID_PUBLIC_KEY") ?? "BGWmKz-IjaFjdRMQhrlOz1qkp2I96WGJ_2Ev2N0u5l1iAmt1qQEcMCJjXvyEmlbATFJ2myFuXuoaUSO603HcDx0";
+const VAPID_PRIVATE = Deno.env.get("VAPID_PRIVATE_KEY") ?? "";
+const SITE_URL = Deno.env.get("SITE_URL") ?? "https://handshake-rho-ten.vercel.app/";
+const APNS_KEY_ID = Deno.env.get("APNS_KEY_ID") ?? "";
+const APNS_TEAM_ID = Deno.env.get("APNS_TEAM_ID") ?? "";
+const APNS_PRIVATE_KEY = Deno.env.get("APNS_PRIVATE_KEY") ?? "";
+const APNS_TOPIC = Deno.env.get("APNS_TOPIC") ?? "com.jadeeb.handshake";
+const APNS_HOST = "https://api.push.apple.com";
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard";
+
+const reply = (status: number, body: unknown) => {
+  console.log("squares:", status, JSON.stringify(body));
+  return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+};
+type Note = { title: string; body: string; tag: string };
+// deno-lint-ignore no-explicit-any
+type Admin = any;
+
+/* ---------- Apple push (APNs) ---------- */
+const b64url = (bytes: Uint8Array) =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const textB64url = (s: string) => b64url(new TextEncoder().encode(s));
+let apnsJwt: { token: string; at: number } | null = null;
+
+/** Apple wants a short signed token (ES256) that is reused for up to an hour. */
+async function apnsToken(keyId: string, teamId: string, pem: string, nowSec = Math.floor(Date.now() / 1000)) {
+  if (apnsJwt && nowSec - apnsJwt.at < 50 * 60) return apnsJwt.token;
+  const der = Uint8Array.from(atob(pem.replace(/-----[^-]+-----/g, "").replace(/\s+/g, "")), (c) => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey("pkcs8", der, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"]);
+  const head = textB64url(JSON.stringify({ alg: "ES256", kid: keyId }));
+  const claims = textB64url(JSON.stringify({ iss: teamId, iat: nowSec }));
+  const sig = new Uint8Array(await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(`${head}.${claims}`)));
+  const token = `${head}.${claims}.${b64url(sig)}`;
+  apnsJwt = { token, at: nowSec };
+  return token;
+}
+
+async function sendApple(admin: Admin, userIds: string[], note: Note) {
+  if (!APNS_KEY_ID || !APNS_TEAM_ID || !APNS_PRIVATE_KEY) {
+    console.log("notify: Apple push skipped, secrets missing:", [!APNS_KEY_ID && "APNS_KEY_ID", !APNS_TEAM_ID && "APNS_TEAM_ID", !APNS_PRIVATE_KEY && "APNS_PRIVATE_KEY"].filter(Boolean).join(", "));
+    return 0;
+  }
+  const { data: phones, error: phErr } = await admin.from("app_push_devices").select("token,user_id").in("user_id", userIds);
+  if (phErr) console.error("notify: couldn't read app_push_devices", phErr.code, phErr.message);
+  console.log("notify: iPhones for", userIds.join(","), "=", phones?.length ?? 0);
+  if (!phones?.length) return 0;
+  // App icon badge: one more for each player with an iPhone (cleared when they open the app).
+  const badges = new Map<string, number>();
+  const { data: bumped, error: bErr } = await admin.rpc("bump_badges", { p_ids: [...new Set(phones.map((x: { user_id: string }) => x.user_id))] });
+  if (bErr) console.error("notify: badge count failed", bErr.code, bErr.message);
+  for (const b of bumped ?? []) badges.set(b.id, b.badge);
+  const jwt = await apnsToken(APNS_KEY_ID, APNS_TEAM_ID, APNS_PRIVATE_KEY);
+  let sent = 0;
+  await Promise.all(phones.map(async ({ token, user_id }: { token: string; user_id: string }) => {
+    const badge = badges.get(user_id);
+    try {
+      const res = await fetch(`${APNS_HOST}/3/device/${token}`, {
+        method: "POST",
+        headers: {
+          authorization: `bearer ${jwt}`,
+          "apns-topic": APNS_TOPIC,
+          "apns-push-type": "alert",
+          "apns-priority": "10",
+          "apns-collapse-id": note.tag.slice(0, 64),
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ aps: { alert: { title: note.title, body: note.body }, sound: "default", ...(badge ? { badge } : {}) }, prediction_id: note.tag }),
+      });
+      if (res.ok) { sent++; console.log("APNs ok", res.status, "apns-id", res.headers.get("apns-id"), "token", token.slice(0, 8)); return; }
+      const why = await res.json().catch(() => ({}));
+      console.error("APNs rejected", res.status, why?.reason, "token", token.slice(0, 8));
+      if (res.status === 410 || why?.reason === "BadDeviceToken" || why?.reason === "Unregistered") {
+        await admin.from("app_push_devices").delete().eq("token", token); // phone uninstalled or turned it off
+      } else console.error("APNs", res.status, why?.reason);
+    } catch (e) { console.error("APNs send failed", e); }
+  }));
+  return sent;
+}
+
+/* ---------- web push ---------- */
+async function sendWeb(admin: Admin, userIds: string[], note: Note) {
+  if (!VAPID_PRIVATE) { console.log("notify: web push skipped, VAPID_PRIVATE_KEY missing"); return 0; }
+  const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", userIds);
+  console.log("notify: browsers for", userIds.join(","), "=", subs?.length ?? 0);
+  if (!subs?.length) return 0;
+  webpush.setVapidDetails(SITE_URL.replace(/\/$/, ""), VAPID_PUBLIC, VAPID_PRIVATE);
+  const payload = JSON.stringify({ title: note.title, body: note.body, url: SITE_URL, tag: note.tag });
+  let sent = 0;
+  await Promise.all(subs.map(async (s: { endpoint: string; p256dh: string; auth: string }) => {
+    try {
+      await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, payload, { TTL: 86400 });
+      sent++;
+    } catch (e) {
+      const code = (e as { statusCode?: number }).statusCode;
+      if (code === 404 || code === 410) await admin.from("push_subscriptions").delete().eq("endpoint", s.endpoint); // browser unsubscribed
+    }
+  }));
+  return sent;
+}
+
+const deliver = async (admin: Admin, userIds: string[], note: Note) =>
+  (await sendWeb(admin, userIds, note)) + (await sendApple(admin, userIds, note));
+
+/* ---------- ESPN scores ---------- */
+type Comp = { homeAway: string; score?: string; team: { displayName: string; shortDisplayName?: string; name?: string; abbreviation?: string }; linescores?: { value: number }[] };
+type Ev = { competitions: { competitors: Comp[]; status: { period: number; type: { name: string; completed: boolean } } }[] };
+const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+const nick = (s: string) => norm(s).split(" ").pop() ?? "";
+const sameTeam = (ours: string, t: Comp["team"]) =>
+  norm(ours) === norm(t.displayName) || nick(ours) === nick(t.displayName) || nick(ours) === norm(t.name ?? "");
+const etDay = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/New_York" }).replaceAll("-", "");
+const short = (team: string) => team.split(" ").pop() ?? team;
+
+/** Quarters that are over, with the cumulative score at the end of each (Q4 = final, OT included). */
+export function quartersDone(ev: Ev, home: string, away: string): { q: number; home: number; away: number }[] | null {
+  const c = ev.competitions?.[0];
+  if (!c) return null;
+  const h = c.competitors.find((x) => x.homeAway === "home"), a = c.competitors.find((x) => x.homeAway === "away");
+  if (!h || !a || !sameTeam(home, h.team) || !sameTeam(away, a.team)) return null;
+  const st = c.status, name = st.type.name;
+  const over = st.type.completed;
+  // a quarter is done once play has moved past it (or it's the break right after it)
+  const doneThrough = over ? 4 : Math.min(3, (name === "STATUS_END_PERIOD" || name === "STATUS_HALFTIME") ? st.period : st.period - 1);
+  const out: { q: number; home: number; away: number }[] = [];
+  const sum = (x: Comp, n: number) => (x.linescores ?? []).slice(0, n).reduce((s, l) => s + (Number(l.value) || 0), 0);
+  for (let q = 1; q <= doneThrough; q++) {
+    if (q === 4) out.push({ q, home: Number(h.score) || 0, away: Number(a.score) || 0 });
+    else {
+      if ((h.linescores?.length ?? 0) < q || (a.linescores?.length ?? 0) < q) break;
+      out.push({ q, home: sum(h, q), away: sum(a, q) });
+    }
+  }
+  return out;
+}
+
+/* ---------- the run ---------- */
+async function members(admin: Admin, pool: string, originator: string) {
+  const inv = ((await admin.from("squares_invitees").select("uid").eq("pool_id", pool)).data ?? []).map((x: { uid: string }) => x.uid);
+  const cl = ((await admin.from("squares_claims").select("uid").eq("pool_id", pool)).data ?? []).map((x: { uid: string }) => x.uid);
+  return [...new Set([originator, ...inv, ...cl])] as string[];
+}
+const ptsText = (n: number) => `${n} pt${n === 1 ? "" : "s"}`;
+
+Deno.serve(async () => {
+  const admin = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+  const drawn = (await admin.rpc("squares_tick")).data ?? 0;
+
+  // 1. scores for games in progress
+  const { data: pending, error: pErr } = await admin.rpc("squares_pending_games");
+  if (pErr) return reply(500, { error: pErr.message });
+  let recorded = 0;
+  const byDay = new Map<string, Ev[]>();
+  for (const g of pending ?? []) {
+    const day = etDay(g.starts_at);
+    if (!byDay.has(day)) {
+      try {
+        const res = await fetch(`${ESPN}?dates=${day}`);
+        byDay.set(day, res.ok ? ((await res.json()).events ?? []) : []);
+        if (!res.ok) console.error("squares: ESPN", res.status);
+      } catch (e) { console.error("squares: ESPN failed", e); byDay.set(day, []); }
+    }
+    for (const ev of byDay.get(day)!) {
+      const qs = quartersDone(ev, g.home, g.away);
+      if (!qs) continue;
+      for (const r of qs) {
+        if (r.q <= g.have) continue;
+        const { data: ok } = await admin.rpc("squares_record_auto", { p_pool: g.pool_id, p_game: g.game_id, p_q: r.q, p_home: r.home, p_away: r.away });
+        if (ok) recorded++;
+      }
+      break;
+    }
+  }
+
+  // 2. "numbers are drawn" notes
+  let sent = 0;
+  const { data: newDraws } = await admin.from("squares_pools").select("id,title,originator").in("status", ["drawn", "done"]).is("draw_notified_at", null);
+  for (const p of newDraws ?? []) {
+    await admin.from("squares_pools").update({ draw_notified_at: new Date().toISOString() }).eq("id", p.id);
+    const to = await members(admin, p.id, p.originator);
+    sent += await deliver(admin, to, { title: `${p.title}: numbers are in`, body: "Squares are locked and the numbers are drawn. Open Squares to see yours.", tag: `squares-${p.id}` });
+  }
+
+  // 3. quarter results
+  const { data: fresh } = await admin.from("squares_results").select("*").is("notified_at", null);
+  for (const r of fresh ?? []) {
+    await admin.from("squares_results").update({ notified_at: new Date().toISOString() }).eq("pool_id", r.pool_id).eq("game_id", r.game_id).eq("quarter", r.quarter);
+    const { data: p } = await admin.from("squares_pools").select("id,title,originator").eq("id", r.pool_id).maybeSingle();
+    const { data: g } = await admin.from("vegas_lines").select("home,away").eq("id", r.game_id).maybeSingle();
+    if (!p || !g) continue;
+    const who = r.uid ? (((await admin.from("profiles").select("name").eq("id", r.uid).maybeSingle()).data?.name as string) || "Someone") : "Nobody";
+    const when = r.quarter === 4 ? "Final" : `End of Q${r.quarter}`;
+    const fixed = r.source === "manual" ? " (score fixed)" : "";
+    const to = await members(admin, p.id, p.originator);
+    sent += await deliver(admin, to, {
+      title: `${p.title}: ${when}${fixed}`,
+      body: `${short(g.away)} ${r.away}, ${short(g.home)} ${r.home}. Square ${r.square}: ${who} wins ${ptsText(r.points)}.`,
+      tag: `squares-${p.id}-${r.game_id}-${r.quarter}`,
+    });
+  }
+  return reply(200, { drawn, games: pending?.length ?? 0, recorded, sent });
+});
