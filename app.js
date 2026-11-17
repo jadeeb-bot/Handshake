@@ -1214,12 +1214,12 @@ function pkStandings(g, rows = pkTotals(g.id)) {
   const inCol = S.pk.v3;
   const wk = pkWeekSoFar(g), wkCol = wk.final > 0;
   rows = pkOrder(g, rows, wk);
-  return `<div class="table"><table><thead><tr><th>Player</th>${wkCol ? `<th class="num" title="Games right this week so far">Wk</th>` : ""}<th class="num">Points</th><th class="num">Wins</th>${inCol ? `<th class="num pkinh" title="Picks in this week">In</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
-    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${pkRank(rows, i, wk)}</span><button class="pkname" data-act="pkPeek" data-id="${g.id}" data-u="${r.uid}">${esc(r.name)}</button>${r.uid === S.me ? ` <span class="you">you</span>` : ""}</td>${wkCol ? `<td class="num${wk.lead.has(r.uid) ? " pklead" : ""}">${wk.right.get(r.uid) ?? 0}${wk.star.has(r.uid) ? "★" : ""}</td>` : ""}<td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
-    + (wkCol ? `<span class="sub">Wk = games right this week so far (${wk.final} of ${wk.games} games final)${wk.lead.size ? ` · leading: ${esc(listNames([...wk.lead].map((u) => pkName(u))))} (${wk.top} right)` : ""}. Updates within minutes of each game ending; points move when the week is scored.</span>` : "")
+  return `<div class="table"><table><thead><tr><th>Player</th>${wkCol ? `<th class="num" title="Wins this week so far (bonus game counts as 2)">Wk</th>` : ""}<th class="num">Points</th><th class="num">Wins</th>${inCol ? `<th class="num pkinh" title="Picks in this week">In</th>` : ""}</tr></thead><tbody>${rows.map((r, i) =>
+    `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><span class="rk">${pkRank(rows, i, wk)}</span><button class="pkname" data-act="pkPeek" data-id="${g.id}" data-u="${r.uid}">${esc(r.name)}</button>${r.uid === S.me ? ` <span class="you">you</span>` : ""}</td>${wkCol ? `<td class="num${wk.lead.has(r.uid) ? " pklead" : ""}">${(wk.right.get(r.uid) || 0) + (wk.star.has(r.uid) ? 1 : 0)}</td>` : ""}<td class="num ${tone(r.points)}">${signed(r.points)}</td><td class="num">${r.won}</td>${inCol ? `<td class="num pkin">${subs.has(r.uid) ? "✓" : ""}</td>` : ""}</tr>`).join("")}</tbody></table></div>`
+    + (wkCol ? `<span class="sub">Wk = wins this week so far; a bonus game hit counts as 2 (${wk.final} of ${wk.games} games final)${wk.lead.size ? ` · leading: ${esc(listNames([...wk.lead].map((u) => pkName(u))))} (${wk.top} win${wk.top === 1 ? "" : "s"})` : ""}. Updates within minutes of each game ending; points move when the week is scored.</span>` : "")
     + (inCol ? `<span class="sub">Picks in this week (${esc(weekLabel(nflWeek(Date.now())))}): ${rows.filter((r) => subs.has(r.uid)).length} of ${rows.length}</span>` : "");
 }
-// This week's games right so far (spread covers on final games; ★ = bonus game right, counts double).
+// This week's wins so far (spread covers on final games; a bonus game hit counts as 2 wins).
 function pkWeekSoFar(g) {
   const games = S.pk.weekGames || [], fin = games.filter((x) => x.completed), right = new Map(), star = new Set();
   for (const p of (S.pk.wkPicks || []).filter((x) => x.group_id === g.id)) {
@@ -1352,11 +1352,11 @@ function pkGameCard(g, v, tbId, mine) {
   if (S.pk.v2 && hs != null) {
     const myBonus = v.bonus.find((x) => x.uid === S.me)?.game_id, isMine = myBonus === g.id;
     const bonusLocked = myBonus && myBonus !== g.id && pkLocked(v.games.find((x) => x.id === myBonus), v.games);
-    if (mine && !locked && !bonusLocked) bonus = `<button class="btn quiet pkbonus ${isMine ? "on" : ""}" aria-pressed="${isMine}" data-act="pkBonus" data-id="${esc(g.id)}">${isMine ? "★ Bonus game: counts double" : "☆ Make this my bonus game"}</button>`;
-    else if (isMine) bonus = `<span class="pkbonus on">★ Your bonus game: counts double</span>`;
+    if (mine && !locked && !bonusLocked) bonus = `<button class="btn quiet pkbonus ${isMine ? "on" : ""}" aria-pressed="${isMine}" data-act="pkBonus" data-id="${esc(g.id)}">${isMine ? "Bonus game: counts as 2 wins" : "Make this my bonus game"}</button>`;
+    else if (isMine) bonus = `<span class="pkbonus on">Your bonus game: counts as 2 wins</span>`;
     if (locked) {
       const others = v.bonus.filter((x) => x.game_id === g.id && x.uid !== S.me).map((x) => pkName(x.uid));
-      if (others.length) bonus += `<span class="sub">★ Bonus game for ${esc(others.join(", "))}</span>`;
+      if (others.length) bonus += `<span class="sub">Bonus game for ${esc(others.join(", "))}</span>`;
     }
   }
   return `<article class="card vgame ${locked ? "locked" : ""}">
@@ -1383,11 +1383,11 @@ function renderPickem() {
   const entrants = new Set([...v.picks.map((p) => p.uid), ...v.tbs.map((t) => t.uid)]);
   let board;
   if (graded) {
-    const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).sort((a, b) => b.points - a.points || b.correct - a.correct);
+    const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).sort((a, b) => b.points - a.points || (b.score ?? b.correct) - (a.score ?? a.correct));
     const wk = S.pk.weeks.find((w) => w.group_id === g.id && w.week === v.week);
-    board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><button class="pkname" data-act="pkPeek" data-id="${v.gid}" data-u="${r.uid}">${esc(pkName(r.uid))}</button>${r.won && r.points > 0 ? " 🏆" : ""}</td><td class="num">${r.correct}${r.bonus_right ? "+1★" : ""}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
+    board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><button class="pkname" data-act="pkPeek" data-id="${v.gid}" data-u="${r.uid}">${esc(pkName(r.uid))}</button>${r.won && r.points > 0 ? " 🏆" : ""}</td><td class="num">${r.score ?? r.correct + (r.bonus_right ? 1 : 0)}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
     board = (wk?.rolled ? `<div class="pkpot">Nobody got half right (best was ${wk.best} of ${wk.games}), so the pot rolled over to next week.</div>` : "")
-      + `<div class="table"><table><thead><tr><th>Final</th><th class="num">Right</th><th class="num">TB off</th><th class="num">Pts</th></tr></thead><tbody>${board}</tbody></table></div>`;
+      + `<div class="table"><table><thead><tr><th>Final</th><th class="num" title="Bonus game counts as 2 wins">Wins</th><th class="num">TB off</th><th class="num">Pts</th></tr></thead><tbody>${board}</tbody></table></div>`;
   } else {
     const rows = [...entrants].map((uid) => {
       const hits = v.picks.filter((p) => p.uid === uid && coverSide(v.games.find((x) => x.id === p.game_id) || {}) === p.side);
@@ -1395,7 +1395,7 @@ function renderPickem() {
       return { uid, right: hits.length, bonusHit, score: hits.length + (bonusHit ? 1 : 0) };
     }).sort((a, b) => b.score - a.score);
     const decided = v.games.filter((x) => { const c = coverSide(x); return c && c !== "push"; }).length;
-    board = rows.length ? `<div class="table"><table><thead><tr><th>So far</th><th class="num">Right</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><button class="pkname" data-act="pkPeek" data-id="${v.gid}" data-u="${r.uid}">${esc(pkName(r.uid))}</button></td><td class="num">${r.right}${r.bonusHit ? "+1★" : ""}</td></tr>`).join("")}</tbody></table></div>`
+    board = rows.length ? `<div class="table"><table><thead><tr><th>So far</th><th class="num" title="Bonus game counts as 2 wins">Wins</th></tr></thead><tbody>${rows.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><button class="pkname" data-act="pkPeek" data-id="${v.gid}" data-u="${r.uid}">${esc(pkName(r.uid))}</button></td><td class="num">${r.score}</td></tr>`).join("")}</tbody></table></div>`
       + (S.pk.v2 && decided ? `<span class="sub">${decided} game${decided === 1 ? "" : "s"} decided so far. The winner needs at least half of the week's games right.</span>` : "")
       : `<span class="sub">No entries yet this week.</span>`;
   }
@@ -2560,7 +2560,7 @@ function pkAllSheet() {
       if (!locked && u !== S.me) return { t: "🔒", cls: "hid" };
       if (!p) return { t: "—", cls: "none" };
       const res = !c ? "" : c === "push" ? "res-push" : c === p.side ? "res-win" : "res-lose";
-      const star = bonus.some((b) => b.uid === u && b.game_id === gm.id) ? "★" : "";
+      const star = bonus.some((b) => b.uid === u && b.game_id === gm.id) ? " (bonus)" : "";
       return { t: nick(p.side === "home" ? gm.home : gm.away) + star, cls: res, side: p.side };
     });
     const sides = new Set(cells.filter((x) => x.side).map((x) => x.side));
@@ -2597,9 +2597,11 @@ function pkPeekSheet() {
     if (!p) return `<div class="peekrow"><span>${matchup}</span><span class="sub">No pick</span></div>`;
     const c = coverSide(g), res = !c ? "" : c === "push" ? "res-push" : c === p.side ? "res-win" : "res-lose";
     if (res === "res-win") right++; else if (res === "res-lose") wrong++; else if (res === "res-push") push++;
-    return `<div class="peekrow"><span>${matchup}${bonus === g.id ? ' <span title="Bonus game: counts double">★</span>' : ""}</span><span class="peekpick ${res}">${label(p.side)}${res === "res-win" ? " ✓" : res === "res-lose" ? " ✗" : res === "res-push" ? " · push" : ""}</span></div>`;
+    return `<div class="peekrow"><span>${matchup}${bonus === g.id ? ' <span class="sub">(bonus: counts as 2)</span>' : ""}</span><span class="peekpick ${res}">${label(p.side)}${res === "res-win" ? " ✓" : res === "res-lose" ? " ✗" : res === "res-push" ? " · push" : ""}</span></div>`;
   }).join("");
-  const tally = right + wrong + push ? `${right} right · ${wrong} wrong${push ? ` · ${push} push` : ""}${bonus && picks.some((p) => p.game_id === bonus && coverSide(games.find((x) => x.id === bonus) || {}) === p.side) ? " · ★ bonus right" : ""}` : "No results yet.";
+  const bonusHit = bonus && picks.some((p) => p.game_id === bonus && coverSide(games.find((x) => x.id === bonus) || {}) === p.side);
+  const wins = right + (bonusHit ? 1 : 0);
+  const tally = right + wrong + push ? `${wins} win${wins === 1 ? "" : "s"}${bonusHit ? " (bonus game counted as 2)" : ""} · ${wrong} wrong${push ? ` · ${push} push` : ""}` : "No results yet.";
   return `<div class="modsheet" role="dialog" aria-label="${name} picks"><div class="card">
     <h3>${name} picks · ${esc(weekLabel(week))}</h3>
     <span class="sub">${tally}${tb != null ? ` · tiebreaker ${tb}` : ""}${hidden ? ` · ${hidden} still hidden until they lock` : ""}</span>
