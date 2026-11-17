@@ -1425,6 +1425,7 @@ function renderPickem() {
     if (d !== day) { if (day) out += `</div>`; out += `<h3 class="vday">${esc(d)}</h3><div class="cards">`; day = d; }
     out += pkGameCard(x, v, tbId, mine);
   }
+  if (entrants.size || graded) board += S.pkShare === v.week ? pkSharePanel(g, v, graded) : `<div class="acts"><button class="btn ghost" data-act="pkShareOpen">Share ${graded ? "results" : "standings"}</button></div>`;
   return `<div style="display:flex;flex-direction:column;gap:14px">${head}${status}${submit}${board}${out}</div>${submit}</div>`;
 }
 async function pkPick(gid, game, side) {
@@ -1484,6 +1485,37 @@ function pkDeleteBox(g) {
   return `<div class="cpanel"><span class="lab">Delete ${esc(g.name)}?</span>
     <span class="sub">This removes the group, its members' picks and any rolled-over pot for everyone, and can't be undone. Points already won in finished weeks stay in Standings. Members get a notification.</span>
     <div class="acts"><button class="btn primary" data-act="pkDel" data-id="${g.id}">Delete the group</button><button class="btn ghost" data-act="pkDelNo">Keep it</button></div></div>`;
+}
+// Share a week's Pick 'em results (or standings so far) as a message.
+function pkShareText(g, v, graded) {
+  const week = weekLabel(v.week), pl = (n) => `${n} win${n === 1 ? "" : "s"}`, lines = [];
+  lines.push(`Pick 'em All! · ${g.name} · ${week}`);
+  if (graded) {
+    const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).map((r) => ({ uid: r.uid, wins: r.score ?? r.correct, won: r.won && r.points > 0, pts: r.points }))
+      .sort((a, b) => b.wins - a.wins);
+    const wk = S.pk.weeks.find((w) => w.group_id === g.id && w.week === v.week), winners = rs.filter((r) => r.won);
+    if (wk?.rolled || !winners.length) lines.push(`Nobody hit .500 (best was ${wk?.best ?? "?"} of ${wk?.games ?? "?"} right), so the pot rolls over to next week.`);
+    else lines.push(`${listNames(winners.map((r) => pkName(r.uid)))} ${winners.length > 1 ? "tied for" : "won"} the week with ${pl(winners[0].wins)} (+${winners[0].pts} pts${winners.length > 1 ? " each" : ""}).`);
+    lines.push(rs.map((r, i) => `${i + 1}) ${pkName(r.uid)}: ${pl(r.wins)}`).join("\n"));
+  } else {
+    const fin = v.games.filter((x) => x.completed).length, games = v.games.filter((x) => x.home_spread != null).length;
+    const rows = [...new Set(v.picks.map((p) => p.uid))].map((uid) => {
+      const hits = v.picks.filter((p) => p.uid === uid && coverSide(v.games.find((x) => x.id === p.game_id) || {}) === p.side);
+      const bonusHit = hits.some((p) => p.game_id === v.bonus.find((x) => x.uid === uid)?.game_id);
+      return { uid, wins: hits.length + (bonusHit ? 1 : 0) };
+    }).sort((a, b) => b.wins - a.wins);
+    lines.push(`Standings so far (${fin} of ${games} games final):`);
+    lines.push(rows.map((r, i) => `${i + 1}) ${pkName(r.uid)}: ${pl(r.wins)}`).join("\n"));
+  }
+  const season = pkTotals(g.id).filter((r) => r.points !== 0);
+  if (season.length) lines.push("Season: " + season.map((r) => `${r.name} ${signed(r.points)}`).join(" · "));
+  lines.push(PAGE_URL);
+  return "🤝 " + lines.join("\n\n");
+}
+function pkSharePanel(g, v, graded) {
+  const text = pkShareText(g, v, graded);
+  return `<div class="cpanel settledone"><span class="lab">Share ${graded ? "the results" : "the standings"}</span><p class="msg">${esc(text)}</p>
+    <div class="acts"><button class="btn primary" data-act="pkShareCopy">Copy</button><a class="btn" href="${esc(smsHref("", text))}">Open Messages</a>${navigator.share ? `<button class="btn" data-act="pkShareNative">Share…</button>` : ""}<button class="btn ghost" data-act="pkShareClose">Close</button></div></div>`;
 }
 async function pkCrash(gid) {
   const { error } = await sb.rpc("request_pickem_crash", { p_group: gid });
@@ -2813,6 +2845,10 @@ const ACT = {
   pkCrash: (el) => pkCrash(el.dataset.id),
   pkPeek: (el) => { S.pkPeek = { gid: el.dataset.id, uid: el.dataset.u }; render(); },
   pkPeekClose: () => { S.pkPeek = null; render(); },
+  pkShareOpen: () => { S.pkShare = S.pkView?.week; render(); },
+  pkShareClose: () => { S.pkShare = null; render(); },
+  pkShareCopy: () => { const t = document.querySelector(".settledone .msg"); copy(t ? t.textContent : "", "Copied. Paste it into your group text."); },
+  pkShareNative: () => { const t = document.querySelector(".settledone .msg"); navigator.share({ text: t ? t.textContent : "" }).catch(() => {}); },
   pkDelAsk: (el) => { S.pkDel = el.dataset.id; render(); },
   pkDelNo: () => { S.pkDel = null; render(); },
   pkDel: async (el) => {
