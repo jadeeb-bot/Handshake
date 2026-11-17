@@ -1185,11 +1185,18 @@ function pkInviteText(g) {
   const code = S.pk.codes.get(g.id);
   return hs(`Join my Pick 'em All! group "${g.name}" on Handshake. Every week, pick every NFL game against the spread. The week's winner takes 5 pts from everyone else. Tap to join: ${PAGE_URL}?join=${code} (or enter code ${code} on the Everyone tab).`);
 }
+// Why a week rolled over, in plain words: the .500 rule counts games right only (not the bonus).
+function pkRolledWhy(g, w) {
+  const rs = S.pk.results.filter((r) => r.group_id === (g.id || g) && r.week === w.week);
+  const right = rs.length ? Math.max(...rs.map((r) => r.correct)) : w.best, need = Math.ceil((w.games || 0) / 2);
+  const bonusTop = rs.some((r) => (r.score ?? r.correct) > r.correct && r.correct === right);
+  return `nobody hit .500 on picks alone (best was ${right} of ${w.games} right; ${need} needed${bonusTop ? ", and the bonus game doesn't count toward it" : ""})`;
+}
 // One line per graded week: who won and how much, or that the pot rolled over.
 function pkWeekLine(g, w) {
   const winners = S.pk.results.filter((r) => r.group_id === g.id && r.week === w.week && r.won && r.points > 0);
   return winners.length ? `${esc(listNames(winners.map((r) => pkName(r.uid))))} won, ${signed(winners[0].points)} pts`
-    : w.rolled ? `nobody got half right (best was ${w.best} of ${w.games}); the pot rolled over`
+    : w.rolled ? `${pkRolledWhy(g, w)}; the pot rolled over`
     : `no points moved (${w.entries} entr${w.entries === 1 ? "y" : "ies"})`;
 }
 function pkResults(g) {
@@ -1240,7 +1247,7 @@ function pkCard(g) {
   const lastWinners = last ? S.pk.results.filter((r) => r.group_id === g.id && r.week === last.week && r.won && r.points > 0) : [];
   const lastLine = !last ? "" : lastWinners.length
     ? `<div class="sub">${esc(weekLabel(last.week))}: ${esc(listNames(lastWinners.map((r) => pkName(r.uid))))} won, ${signed(lastWinners[0].points)} pts</div>`
-    : last.rolled ? `<div class="sub">${esc(weekLabel(last.week))}: nobody got half right (best was ${last.best} of ${last.games}). The pot rolled over.</div>`
+    : last.rolled ? `<div class="sub">${esc(weekLabel(last.week))}: ${pkRolledWhy(g, last)}. The pot rolled over.</div>`
     : `<div class="sub">${esc(weekLabel(last.week))}: no points moved (${last.entries} entr${last.entries === 1 ? "y" : "ies"})</div>`;
   const rolled = S.pk.carry.filter((c) => c.group_id === g.id).length;
   const potLine = rolled ? `<div class="pkpot">💰 <b>${rolled * 5} pts rolled over</b> and waiting for this week's winner.</div>` : "";
@@ -1386,7 +1393,7 @@ function renderPickem() {
     const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).sort((a, b) => b.points - a.points || (b.score ?? b.correct) - (a.score ?? a.correct));
     const wk = S.pk.weeks.find((w) => w.group_id === g.id && w.week === v.week);
     board = rs.map((r) => `<tr class="${r.uid === S.me ? "me" : ""}"><td class="pl"><button class="pkname" data-act="pkPeek" data-id="${v.gid}" data-u="${r.uid}">${esc(pkName(r.uid))}</button>${r.won && r.points > 0 ? " 🏆" : ""}</td><td class="num">${r.score ?? r.correct + (r.bonus_right ? 1 : 0)}</td><td class="num">${r.tb_diff ?? "–"}</td><td class="num ${tone(r.points)}">${signed(r.points)}</td></tr>`).join("");
-    board = (wk?.rolled ? `<div class="pkpot">Nobody got half right (best was ${wk.best} of ${wk.games}), so the pot rolled over to next week.</div>` : "")
+    board = (wk?.rolled ? `<div class="pkpot">${(() => { const t = pkRolledWhy(g, wk); return t[0].toUpperCase() + t.slice(1); })()}, so the pot rolled over to next week.</div>` : "")
       + `<div class="table"><table><thead><tr><th>Final</th><th class="num" title="Bonus game counts as 2 wins">Wins</th><th class="num">TB off</th><th class="num">Pts</th></tr></thead><tbody>${board}</tbody></table></div>`;
   } else {
     const rows = [...entrants].map((uid) => {
@@ -1494,7 +1501,7 @@ function pkShareText(g, v, graded) {
     const rs = S.pk.results.filter((r) => r.group_id === g.id && r.week === v.week).map((r) => ({ uid: r.uid, wins: r.score ?? r.correct, won: r.won && r.points > 0, pts: r.points }))
       .sort((a, b) => b.wins - a.wins);
     const wk = S.pk.weeks.find((w) => w.group_id === g.id && w.week === v.week), winners = rs.filter((r) => r.won);
-    if (wk?.rolled || !winners.length) lines.push(`Nobody hit .500 (best was ${wk?.best ?? "?"} of ${wk?.games ?? "?"} right), so the pot rolls over to next week.`);
+    if (wk?.rolled || !winners.length) lines.push(wk ? `${(() => { const t = pkRolledWhy(g, wk); return t[0].toUpperCase() + t.slice(1); })()}, so the pot rolls over to next week.` : "The pot rolls over to next week.");
     else lines.push(`${listNames(winners.map((r) => pkName(r.uid)))} ${winners.length > 1 ? "tied for" : "won"} the week with ${pl(winners[0].wins)} (+${winners[0].pts} pts${winners.length > 1 ? " each" : ""}).`);
     lines.push(rs.map((r, i) => `${i + 1}) ${pkName(r.uid)}: ${pl(r.wins)}`).join("\n"));
   } else {
